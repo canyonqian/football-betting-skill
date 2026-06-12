@@ -51,7 +51,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
     standings_raw = get_standings(league_id, season)
     
     # 4. Current odds (match winner only)
-    odds_data = get_odds(fixture=fixture_id, bet=BET_MATCH_WINNER)
+    odds_data = get_odds(fixture_id=fixture_id, bet=BET_MATCH_WINNER)
     
     # --- Compute fundamentals-based expectation ---
     
