@@ -44,19 +44,19 @@ User request: "Analyze fixture_id=X, league_id=Y, season=Z"
 
 ### Step 0: Verify API Key
 
-**BEFORE any analysis, verify `RAPIDAPI_KEY` is set:**
+**BEFORE any analysis, verify `FOOTBALL_API_KEY` is set:**
 
 ```bash
-if (-not $env:RAPIDAPI_KEY) { Write-Output "ERROR: RAPIDAPI_KEY environment variable not set. Please configure it first."; exit 1 }
+if (-not $env:FOOTBALL_API_KEY) { Write-Output "ERROR: FOOTBALL_API_KEY environment variable not set. Please configure it first."; exit 1 }
 python -c "from scripts.api.api_football import _headers; print('API key configured: OK')"
 ```
 
 If not configured, **STOP and tell the user:**
-> "RAPIDAPI_KEY not configured. Get a free key at https://rapidapi.com/api-sports/api/api-football and set it with: `set RAPIDAPI_KEY=your_key_here`"
+> "FOOTBALL_API_KEY not configured. Get a free key at https://dashboard.api-football.com/register and set it with: `set FOOTBALL_API_KEY=your_key_here`"
 
 **Do NOT proceed without an API key.** Every sub-agent depends on it.
 
-Get a free key at https://rapidapi.com/api-sports/api/api-football — no credit card required for the free tier (100 requests/day). To upgrade for more requests, subscribe to a paid plan on the same page.
+Get a free key at https://dashboard.api-football.com/register — no credit card required for the free tier (100 requests/day). To upgrade for more requests, subscribe to a paid plan on the same site.
 
 ### Step 1: Parse the user request
 
@@ -103,7 +103,7 @@ Task 8 (player_coach_xg):
 - Sub-agents are information-isolated — they do NOT share context or see each other's output
 - Each sub-agent returns JSON to stdout. Capture it.
 - If any sub-agent returns an error, record it and continue. A partial analysis is better than none.
-- Each sub-agent script requires `RAPIDAPI_KEY` in environment variables
+- Each sub-agent script requires `FOOTBALL_API_KEY` in environment variables
 - For xG analysis (agent H), optionally install: `pip install soccerdata`
 
 ### Step 3: Run the aggregator
@@ -158,10 +158,10 @@ Or apply the cross-validation logic from `aggregator.py` directly in your reason
 
 Before analysis, ensure:
 ```bash
-set RAPIDAPI_KEY=your_key_here
+set FOOTBALL_API_KEY=your_key_here
 ```
 
-Get an API key from: https://rapidapi.com/api-sports/api/api-football
+Get an API key from: https://dashboard.api-football.com/register
 Sign up for the free tier (100 requests/day). No credit card required.
 
 **If rate limit is hit:** Report the error clearly. User can upgrade their plan for more requests.

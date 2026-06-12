@@ -1,10 +1,11 @@
 """API-Football v3 client — single data source for all analysis.
 
-Requires RAPIDAPI_KEY environment variable.
-Uses RapidAPI free tier endpoints (api-football-v1.p.rapidapi.com/v3/).
+Requires FOOTBALL_API_KEY environment variable.
+Uses API-Sports direct platform (https://v3.football.api-sports.io/).
 
 Rate limit: 100 requests/day on free tier.
 On rate limit hit, raises RateLimitError — no fallback, no downgrade.
+Register at: https://dashboard.api-football.com/register
 """
 
 import os
@@ -14,17 +15,14 @@ from typing import Any, Optional
 
 from utils import RateLimitError
 
-BASE_URL = "https://api-football-v1.p.rapidapi.com/v3"
+BASE_URL = "https://v3.football.api-sports.io"
 
 
 def _headers() -> dict[str, str]:
-    key = os.environ.get("RAPIDAPI_KEY", "")
+    key = os.environ.get("FOOTBALL_API_KEY", "")
     if not key:
-        raise RuntimeError("RAPIDAPI_KEY environment variable not set")
-    return {
-        "x-rapidapi-key": key,
-        "x-rapidapi-host": "api-football-v1.p.rapidapi.com",
-    }
+        raise RuntimeError("FOOTBALL_API_KEY environment variable not set")
+    return {"x-apisports-key": key}
 
 
 def _get(endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:

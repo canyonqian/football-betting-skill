@@ -31,8 +31,8 @@ pip install requests
 pip install soccerdata    # optional, for real xG data
 
 # Configure API key
-# Get a free key at https://rapidapi.com/api-sports/api/api-football
-set RAPIDAPI_KEY=your_key_here
+# Get a free key at https://dashboard.api-football.com/register
+set FOOTBALL_API_KEY=your_key_here
 ```
 
 ## Usage
@@ -54,11 +54,11 @@ If you don't have fixture IDs, the skill will look them up for you using team na
 | Python 3.9+ | Yes | Script runtime |
 | `requests` | Yes | API-Football v3 HTTP client |
 | `soccerdata` | Optional | Real xG data from Understat (agent H) |
-| RAPIDAPI_KEY | Yes | Free from [RapidAPI](https://rapidapi.com/api-sports/api/api-football) |
+| FOOTBALL_API_KEY | Yes | Free from [dashboard.api-football.com](https://dashboard.api-football.com/register) |
 
 ## Data Source
 
-All data comes from [API-Football v3](https://www.api-football.com/) via RapidAPI. Free tier: 100 requests/day. No fallback, no workaround — if rate-limited, you need to upgrade.
+All data comes from [API-Football v3](https://www.api-football.com/) via api-sports.io. Free tier: 100 requests/day. No fallback, no workaround — if rate-limited, you need to upgrade.
 
 ## Output
 

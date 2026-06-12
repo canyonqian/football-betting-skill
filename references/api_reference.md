@@ -2,12 +2,11 @@
 
 ## Base URL
 ```
-https://api-football-v1.p.rapidapi.com/v3
+https://v3.football.api-sports.io
 ```
 
 ## Authentication
-Header: `x-rapidapi-key: YOUR_KEY`
-Header: `x-rapidapi-host: api-football-v1.p.rapidapi.com`
+Header: `x-apisports-key: YOUR_KEY`
 
 ## Rate Limits (Free Tier)
 - 100 requests/day
