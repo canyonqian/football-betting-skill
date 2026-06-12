@@ -54,6 +54,8 @@ If not configured, **STOP and tell the user:**
 
 **Do NOT proceed without an API key.** Every sub-agent depends on it.
 
+Get a free key at https://rapidapi.com/api-sports/api/api-football — no credit card required for the free tier (100 requests/day). To upgrade for more requests, subscribe to a paid plan on the same page.
+
 ### Step 1: Parse the user request
 
 The user may provide:
