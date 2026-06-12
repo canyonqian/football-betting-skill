@@ -1,11 +1,11 @@
-"""Master Aggregator — cross-validates 6 sub-agent outputs.
+"""Master Aggregator — cross-validates 8 sub-agent outputs.
 
 This script is NOT meant to be run directly as a Python script. It is a
 reference implementation showing the logic the AI agent should apply when
 aggregating sub-agent results.
 
 When using this skill, the AI agent:
-1. Spawns 6 parallel sub-agents (each runs the respective analysis script)
+1. Spawns 8 parallel sub-agents (each runs the respective analysis script)
 2. Collects all JSON outputs
 3. Feeds them to the logic below to produce the final report
 
@@ -149,6 +149,57 @@ def detect_conflicts(valid_results: list[dict]) -> list[dict]:
                     "conflict": f"Historical home win rate {hist_prob:.1%} vs market implied {market_prob:.1%}",
                     "interpretation": "Market is pricing differently from historical norms",
                 })
+
+    # Conflict 4: Tactical advantage vs market odds
+    tm = signals.get("tactical_matchup", {})
+    if tm and f:
+        f_gap = f.get("metrics", {}).get("gap")
+        tm_advantages = tm.get("metrics", {}).get("style_clash", {}).get("tactical_advantages", [])
+        if tm_advantages and f_gap is not None and f_gap < -0.05:
+            conflicts.append({
+                "dimensions": ["tactical_matchup", "fundamentals"],
+                "conflict": f"Tactical analysis favors {tm.get('finding', '')[:50]} but fundamentals gap is negative ({f_gap:.3f})",
+                "interpretation": "Tactical edge may not be priced in — potential value if fundamentals are wrong",
+            })
+
+    # Conflict 5: xG signal vs odds over/under
+    pc = signals.get("player_coach_xg", {})
+    os_sig = signals.get("odds_signals", {})
+    if pc and os_sig:
+        xg_proxy = pc.get("metrics", {}).get("xg_proxy", {})
+        home_gpg = xg_proxy.get("home", {}).get("goals_per_game", 0)
+        away_gpg = xg_proxy.get("away", {}).get("goals_per_game", 0)
+        ou_line = os_sig.get("metrics", {}).get("over_under", {}).get("line", "2.5")
+        try:
+            ou_val = float(ou_line)
+            combined_gpg = home_gpg + away_gpg
+            if combined_gpg > ou_val + 0.5:
+                conflicts.append({
+                    "dimensions": ["player_coach_xg", "odds_signals"],
+                    "conflict": f"Combined GPG ({combined_gpg:.1f}) exceeds O/U line ({ou_line}) — over may be value",
+                    "interpretation": "Market O/U line looks low relative to team scoring rates",
+                })
+            elif combined_gpg < ou_val - 0.5:
+                conflicts.append({
+                    "dimensions": ["player_coach_xg", "odds_signals"],
+                    "conflict": f"Combined GPG ({combined_gpg:.1f}) below O/U line ({ou_line}) — under may be value",
+                    "interpretation": "Market O/U line looks high relative to team scoring rates",
+                })
+        except (ValueError, TypeError):
+            pass
+
+    # Conflict 6: Injury impact vs market odds
+    of_sig = signals.get("objective_factors", {})
+    if pc and of_sig and f:
+        home_injuries = of_sig.get("metrics", {}).get("home", {}).get("injuries", 0)
+        away_injuries = of_sig.get("metrics", {}).get("away", {}).get("injuries", 0)
+        f_gap = f.get("metrics", {}).get("gap")
+        if (home_injuries >= 3 or away_injuries >= 3) and f_gap is not None and abs(f_gap) < 0.03:
+            conflicts.append({
+                "dimensions": ["objective_factors", "fundamentals"],
+                "conflict": f"Significant injuries ({home_injuries}+{away_injuries}) but fundamentals gap is small ({f_gap:.3f})",
+                "interpretation": "Injury impact may be underestimated by both fundamentals model and market",
+            })
     
     return conflicts
 
@@ -166,9 +217,11 @@ def detect_consensus(valid_results: list[dict]) -> list[dict]:
         finding = r.get("finding", "").lower()
         # Simple heuristic: check for positive/negative language
         positive_words = ["undervalue", "value", "strong home", "favor", "bullish", 
-                         "low overround", "sharp market"]
+                         "low overround", "sharp market", "tactical edge", "advantage",
+                         "overperform", "clinical"]
         negative_words = ["overvalue", "overheat", "trap", "divergence", "unreliable",
-                         "high overround", "avoid"]
+                         "high overround", "avoid", "disadvantage", "underperform",
+                         "wasteful"]
         
         pos_count = sum(1 for w in positive_words if w in finding)
         neg_count = sum(1 for w in negative_words if w in finding)
@@ -180,17 +233,17 @@ def detect_consensus(valid_results: list[dict]) -> list[dict]:
         else:
             neutral += 1
     
-    if lean_bullish >= 4:
+    if lean_bullish >= 5:
         consensus.append({
             "dimensions": ["all"],
             "agreement": f"Strong bullish consensus ({lean_bullish}/{len(valid_results)} agents favor the favorite)",
         })
-    elif lean_bearish >= 4:
+    elif lean_bearish >= 5:
         consensus.append({
             "dimensions": ["all"],
             "agreement": f"Strong bearish consensus ({lean_bearish}/{len(valid_results)} agents oppose the favorite)",
         })
-    elif lean_bullish + lean_bearish >= 4:
+    elif lean_bullish + lean_bearish >= 6:
         consensus.append({
             "dimensions": ["all"],
             "agreement": f"Split opinion — no clear consensus ({lean_bullish} bull, {lean_bearish} bear, {neutral} neutral)",
@@ -234,7 +287,7 @@ def build_bet_recommendations(valid_results: list[dict],
         bets["1x2"]["recommendation"] = "avoid"
         bets["1x2"]["confidence"] = "high"
         bets["1x2"]["reasoning"] = "Major conflicts between analysis dimensions — unreliable signals"
-    elif strong_count >= 4:
+    elif strong_count >= 5:
         bets["1x2"]["recommendation"] = "recommend"
         bets["1x2"]["confidence"] = "medium"
         bets["1x2"]["reasoning"] = "Majority of agents show strong signals"
