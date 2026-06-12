@@ -5,7 +5,7 @@ and tactical compatibility between two teams to detect style clashes
 that the market may not be pricing in.
 
 Usage:
-    python tactical_matchup.py <fixture_id> <league_id> <season>
+    python tactical_matchup.py <match_id> <competition_id> <season>
 """
 
 import sys
@@ -16,8 +16,44 @@ from api.api_football import (
     get_fixture_by_id,
     get_team_statistics,
     get_fixtures,
+    get_teams,
 )
+from api.football_data import get_match, get_standings, get_head2head
 from utils import print_json
+
+try:
+    from soccerdata import FBref
+    HAS_SOCCERDATA = True
+except ImportError:
+    HAS_SOCCERDATA = False
+
+
+COMPETITION_TO_LEAGUE_ID = {
+    "PL": 39, "BL1": 78, "SA": 135, "PD": 140, "FL1": 61, "CL": 2,
+}
+
+COMP_TO_FBREF = {
+    "PL": "ENG-Premier League", "BL1": "GER-Bundesliga",
+    "SA": "ITA-Serie A", "PD": "ESP-La Liga",
+    "FL1": "FRA-Ligue 1", "CL": "UEFA-Champions League",
+}
+
+
+def get_fbref_stats(competition_id: str, season: int) -> dict:
+    if not HAS_SOCCERDATA:
+        return {"available": False}
+    league = COMP_TO_FBREF.get(competition_id)
+    if not league:
+        return {"available": False}
+    try:
+        fbref = FBref(league, str(season))
+        schedule = fbref.read_schedule()
+        return {
+            "available": True,
+            "matches_count": len(schedule) if schedule is not None else 0,
+        }
+    except Exception:
+        return {"available": False}
 
 
 # Formation compatibility matrix: which formations counter which
@@ -326,37 +362,52 @@ def compute_style_clash(home_style: dict, away_style: dict,
     }
 
 
-def run(fixture_id: int, league_id: int, season: int) -> dict:
-    fixture = get_fixture_by_id(fixture_id)
-    if not fixture:
-        return {"agent": "tactical_matchup", "fixture_id": fixture_id, "error": "Fixture not found"}
-    
-    f = fixture[0]
-    home_id = f["teams"]["home"]["id"]
-    away_id = f["teams"]["away"]["id"]
-    home_name = f["teams"]["home"]["name"]
-    away_name = f["teams"]["away"]["name"]
-    
+def run(match_id: int, competition_id: str, season: int) -> dict:
+    match = get_match(match_id)
+    if not match:
+        return {"agent": "tactical_matchup", "match_id": match_id, "error": "Match not found"}
+
+    home_name = match.get("homeTeam", {}).get("name", "")
+    away_name = match.get("awayTeam", {}).get("name", "")
+
+    standings = get_standings(competition_id, season)
+    h2h = get_head2head(match_id)
+
+    league_id = COMPETITION_TO_LEAGUE_ID.get(competition_id)
+    if league_id:
+        home_search = get_teams(name=home_name, league_id=league_id, season=season) or []
+        away_search = get_teams(name=away_name, league_id=league_id, season=season) or []
+        home_id = home_search[0]["team"]["id"] if home_search else None
+        away_id = away_search[0]["team"]["id"] if away_search else None
+    else:
+        home_id = away_id = None
+
+    if not home_id or not away_id:
+        return {"agent": "tactical_matchup", "match_id": match_id, "error": "Could not resolve team IDs in API-Football"}
+
     # Team statistics (formations + goal timing)
     home_stats = get_team_statistics(home_id, league_id, season).get("response", {})
     away_stats = get_team_statistics(away_id, league_id, season).get("response", {})
-    
+
     home_formation = extract_formation(home_stats)
     away_formation = extract_formation(away_stats)
-    
+
     # Goal timing
     home_timing = analyse_goal_timing(home_stats)
     away_timing = analyse_goal_timing(away_stats)
-    
+
     # Style analysis from season stats (avoids per-fixture API calls)
     home_style = analyse_style_from_season(home_stats, home_name)
     away_style = analyse_style_from_season(away_stats, away_name)
-    
+
+    # Soccerdata enrichment
+    fbref_stats = get_fbref_stats(competition_id, season)
+
     # Formation compatibility
     home_form = home_stats.get("form", "")
     away_form = away_stats.get("form", "")
     clashes = compute_style_clash(home_style, away_style, home_form, away_form)
-    
+
     # Formation counter check
     formation_notes = []
     if home_formation in FORMATION_COUNTERS and away_formation in FORMATION_COUNTERS.get(home_formation, []):
@@ -365,7 +416,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         formation_notes.append(f"{away_formation} vs {home_formation}: {away_name} formation has tactical edge")
     if not formation_notes:
         formation_notes.append(f"{home_formation} vs {away_formation}: No clear formation advantage")
-    
+
     # Timing clash
     timing_notes = []
     if home_timing.get("scoring_pattern") == "early-dominant" and away_timing.get("conceding_pattern") == "early-dominant":
@@ -374,10 +425,10 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         timing_notes.append(f"{away_name} scores early, {home_name} concedes early — potential fast start for {away_name}")
     if home_timing.get("scoring_pattern") == "late-dominant" and away_timing.get("conceding_pattern") == "late-dominant":
         timing_notes.append(f"{home_name} scores late, {away_name} concedes late — watch final 15 minutes")
-    
+
     # Build finding
     all_notes = formation_notes + timing_notes + clashes.get("key_clashes", []) + clashes.get("tactical_advantages", [])
-    
+
     finding_parts = []
     if formation_notes:
         finding_parts.append(formation_notes[0])
@@ -385,9 +436,9 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         finding_parts.append(timing_notes[0])
     if clashes.get("key_clashes"):
         finding_parts.append(clashes["key_clashes"][0])
-    
+
     finding = " | ".join(finding_parts[:3]) if finding_parts else "Tactical styles analysed"
-    
+
     # Signal strength
     if clashes.get("clash_count", 0) >= 2 or len(timing_notes) >= 2:
         strength = "strong"
@@ -395,7 +446,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         strength = "medium"
     else:
         strength = "weak"
-    
+
     return {
         "agent": "tactical_matchup",
         "fixture": f"{home_name} vs {away_name}",
@@ -414,19 +465,32 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
             },
             "style_clash": clashes,
         },
+        "fbref_stats": fbref_stats,
+        "standings_summary": {
+            "total_groups": len(standings),
+            "has_data": len(standings) > 0,
+        },
+        "h2h_summary": {
+            "previous_meetings": h2h.get("resultSet", {}).get("count", 0) if isinstance(h2h, dict) else 0,
+        },
+        "search_queries": [
+            f"{home_name} vs {away_name} predicted lineup {season}",
+            f"{home_name} confirmed formation {season}",
+            f"{away_name} confirmed formation {season}",
+        ],
         "notes": all_notes,
     }
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print_json({"error": "Usage: tactical_matchup.py <fixture_id> <league_id> <season>"})
+        print_json({"error": "Usage: tactical_matchup.py <match_id> <competition_id> <season>"})
         sys.exit(1)
-    fixture_id = int(sys.argv[1])
-    league_id = int(sys.argv[2])
+    match_id = int(sys.argv[1])
+    competition_id = sys.argv[2]
     season = int(sys.argv[3])
     try:
-        result = run(fixture_id, league_id, season)
+        result = run(match_id, competition_id, season)
         print_json(result)
     except Exception as e:
-        print_json({"agent": "tactical_matchup", "fixture_id": fixture_id, "error": str(e)})
+        print_json({"agent": "tactical_matchup", "match_id": match_id, "error": str(e)})
