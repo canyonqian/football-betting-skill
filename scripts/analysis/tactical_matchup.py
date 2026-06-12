@@ -54,8 +54,74 @@ def extract_formation(team_stats: dict) -> str:
     return normalize_formation(best.get("formation", "Unknown"))
 
 
+def analyse_style_from_season(team_stats: dict, team_name: str) -> dict:
+    """Infer playing style from season-level statistics (NO per-fixture API calls).
+    
+    Uses lineups, goals/min, cards, clean sheets from /teams/statistics.
+    Avoids per-fixture pulls — saves ~8 API calls per agent run.
+    """
+    # Goals per game (season average)
+    goals = team_stats.get("goals", {})
+    gpg_total = float(goals.get("for", {}).get("average", {}).get("total", 0) or 0)
+    gpg_home = float(goals.get("for", {}).get("average", {}).get("home", 0) or 0)
+    gpg_away = float(goals.get("for", {}).get("average", {}).get("away", 0) or 0)
+    
+    # Defensive
+    total_played = int(team_stats.get("fixtures", {}).get("played", {}).get("total", 0) or 0)
+    clean_sheets = int(team_stats.get("clean_sheet", {}).get("total", 0) or 0)
+    cs_rate = clean_sheets / max(total_played, 1)
+    failed_score = int(team_stats.get("failed_to_score", {}).get("total", 0) or 0)
+    fts_rate = failed_score / max(total_played, 1)
+    
+    # Aggression
+    cards = team_stats.get("cards", {})
+    yellows = int(cards.get("yellow", {}).get("total", 0) or 0)
+    reds = int(cards.get("red", {}).get("total", 0) or 0)
+    cards_per_game = (yellows + reds * 5) / max(total_played, 1)
+    
+    # Form
+    form = team_stats.get("form", "")
+    
+    # Style classification
+    style = []
+    if gpg_total >= 2.0:
+        style.append("high-scoring")
+    elif gpg_total <= 1.0:
+        style.append("low-scoring")
+    else:
+        style.append("moderate-scoring")
+    
+    if cs_rate >= 0.4:
+        style.append("solid-defence")
+    elif cs_rate <= 0.15:
+        style.append("leaky-defence")
+    
+    if cards_per_game >= 3.0:
+        style.append("aggressive")
+    elif cards_per_game <= 1.5:
+        style.append("disciplined")
+    
+    if fts_rate <= 0.15:
+        style.append("consistent-scorer")
+    elif fts_rate >= 0.40:
+        style.append("inconsistent-attack")
+    
+    return {
+        "team_name": team_name,
+        "goals_per_game": round(gpg_total, 2),
+        "goals_per_game_home": round(gpg_home, 2),
+        "goals_per_game_away": round(gpg_away, 2),
+        "clean_sheet_rate": round(cs_rate, 2),
+        "failed_to_score_rate": round(fts_rate, 2),
+        "cards_per_game": round(cards_per_game, 2),
+        "matches_played": total_played,
+        "style_tags": style,
+    }
+
+
 def analyse_style(fixtures: list[dict], team_id: int, team_name: str) -> dict:
-    """Infer playing style from recent match statistics."""
+    """(Deprecated) Infer playing style from per-fixture stats. 
+    Use analyse_style_from_season instead — saves API calls."""
     possession_vals = []
     passes_vals = []
     shots_vals = []
@@ -63,7 +129,8 @@ def analyse_style(fixtures: list[dict], team_id: int, team_name: str) -> dict:
     tackles_vals = []
     fouls_vals = []
     
-    for f in fixtures[-5:]:  # Last 5 matches
+    limit = min(3, len(fixtures))  # Reduced from 5 to 3
+    for f in fixtures[-limit:]:
         stats = f.get("statistics", [])
         if not stats:
             continue
@@ -220,28 +287,36 @@ def compute_style_clash(home_style: dict, away_style: dict,
     clashes = []
     advantages = []
     
-    # Possession clash: high possession vs counter-attack
     home_tags = home_style.get("style_tags", [])
     away_tags = away_style.get("style_tags", [])
     
-    if "possession-heavy" in home_tags and "counter-attack" in away_tags:
-        clashes.append(f"{away_style['team_name']} counter-attack style targets {home_style['team_name']} high-line possession")
-    if "possession-heavy" in away_tags and "counter-attack" in home_tags:
-        clashes.append(f"{home_style['team_name']} counter-attack style targets {away_style['team_name']} high-line possession")
+    # Scoring power mismatch
+    home_gpg = home_style.get("goals_per_game", 0)
+    away_gpg = away_style.get("goals_per_game", 0)
+    if home_gpg > away_gpg * 1.5:
+        advantages.append(f"{home_style['team_name']} much higher scoring ({home_gpg}/game vs {away_gpg})")
+    elif away_gpg > home_gpg * 1.5:
+        advantages.append(f"{away_style['team_name']} much higher scoring ({away_gpg}/game vs {home_gpg})")
     
-    # Press clash: high press vs passive defence
-    if "high-press" in home_tags and "passive-defence" in away_tags:
-        advantages.append(f"{home_style['team_name']} high press likely to disrupt {away_style['team_name']} build-up")
-    if "high-press" in away_tags and "passive-defence" in home_tags:
-        advantages.append(f"{away_style['team_name']} high press likely to disrupt {home_style['team_name']} build-up")
+    # Defence quality mismatch
+    home_cs = home_style.get("clean_sheet_rate", 0)
+    away_cs = away_style.get("clean_sheet_rate", 0)
+    if "solid-defence" in home_tags and "leaky-defence" in away_tags:
+        advantages.append(f"{home_style['team_name']} solid defence vs {away_style['team_name']} leaky defence")
+    if "solid-defence" in away_tags and "leaky-defence" in home_tags:
+        advantages.append(f"{away_style['team_name']} solid defence vs {home_style['team_name']} leaky defence")
     
-    # Shot volume mismatch
-    home_shots = home_style.get("avg_shots", 0)
-    away_shots = away_style.get("avg_shots", 0)
-    if home_shots > away_shots * 1.5:
-        advantages.append(f"{home_style['team_name']} significantly more shots ({home_shots}/game vs {away_shots})")
-    elif away_shots > home_shots * 1.5:
-        advantages.append(f"{away_style['team_name']} significantly more shots ({away_shots}/game vs {home_shots})")
+    # Attack consistency
+    if "consistent-scorer" in home_tags and "leaky-defence" in away_tags:
+        advantages.append(f"{home_style['team_name']} consistent attack vs {away_style['team_name']} leaky defence")
+    if "consistent-scorer" in away_tags and "leaky-defence" in home_tags:
+        advantages.append(f"{away_style['team_name']} consistent attack vs {home_style['team_name']} leaky defence")
+    
+    # Aggression clash — aggressive vs disciplined
+    if "aggressive" in home_tags and "disciplined" in away_tags:
+        clashes.append(f"{home_style['team_name']} aggressive style may draw fouls from {away_style['team_name']} disciplined setup")
+    if "aggressive" in away_tags and "disciplined" in home_tags:
+        clashes.append(f"{away_style['team_name']} aggressive style may draw fouls from {home_style['team_name']} disciplined setup")
     
     return {
         "key_clashes": clashes,
@@ -273,35 +348,9 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
     home_timing = analyse_goal_timing(home_stats)
     away_timing = analyse_goal_timing(away_stats)
     
-    # Recent fixtures for style analysis
-    home_fixtures = get_fixtures(league_id, season, team_id=home_id)
-    away_fixtures = get_fixtures(league_id, season, team_id=away_id)
-    
-    # Sort by date descending, take completed ones
-    home_recent = [fx for fx in home_fixtures if fx.get("fixture", {}).get("status", {}).get("short") == "FT"]
-    away_recent = [fx for fx in away_fixtures if fx.get("fixture", {}).get("status", {}).get("short") == "FT"]
-    home_recent.sort(key=lambda x: x.get("fixture", {}).get("date", ""), reverse=True)
-    away_recent.sort(key=lambda x: x.get("fixture", {}).get("date", ""), reverse=True)
-    
-    # Get detailed stats for recent fixtures
-    home_detail = []
-    away_detail = []
-    for fx in home_recent[:5]:
-        fid = fx.get("fixture", {}).get("id")
-        if fid:
-            detail = get_fixture_by_id(fid)
-            if detail:
-                home_detail.append(detail[0])
-    for fx in away_recent[:5]:
-        fid = fx.get("fixture", {}).get("id")
-        if fid:
-            detail = get_fixture_by_id(fid)
-            if detail:
-                away_detail.append(detail[0])
-    
-    # Style analysis
-    home_style = analyse_style(home_detail, home_id, home_name)
-    away_style = analyse_style(away_detail, away_id, away_name)
+    # Style analysis from season stats (avoids per-fixture API calls)
+    home_style = analyse_style_from_season(home_stats, home_name)
+    away_style = analyse_style_from_season(away_stats, away_name)
     
     # Formation compatibility
     home_form = home_stats.get("form", "")
