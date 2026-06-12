@@ -638,6 +638,85 @@ def synthesize_probabilities(valid_results: list[dict], confidence: dict) -> dic
         },
         "asian_handicap": ah_recommendation,
         "over_under": ou_recommendation,
+        "correct_score": synthesize_correct_score(valid_results, confidence),
+    }
+
+
+def poisson_prob(lmbda: float, k: int) -> float:
+    """Poisson probability P(X=k)."""
+    import math
+    return (lmbda ** k) * math.exp(-lmbda) / math.factorial(k)
+
+
+def synthesize_correct_score(valid_results: list[dict], confidence: dict) -> dict:
+    """Estimate correct score probabilities using Poisson model from goals/game data.
+    
+    This is a LOW-CONFIDENCE estimate. Correct score betting has high variance.
+    Use as directional reference only, not as betting advice.
+    """
+    home_gpg = None
+    away_gpg = None
+    
+    for r in valid_results:
+        agent = r["agent"]
+        metrics = r.get("key_metrics", {})
+        
+        if agent == "fundamentals":
+            hg = metrics.get("home_gpg_home")
+            ag = metrics.get("away_gpg_away")
+            if hg is not None:
+                home_gpg = hg
+            if ag is not None:
+                away_gpg = ag
+        
+        elif agent == "player_coach_xg":
+            xg_home = metrics.get("xg_proxy", {}).get("home", {}).get("goals_per_game")
+            xg_away = metrics.get("xg_proxy", {}).get("away", {}).get("goals_per_game")
+            if xg_home and not home_gpg:
+                home_gpg = xg_home
+            if xg_away and not away_gpg:
+                away_gpg = xg_away
+    
+    if not home_gpg or not away_gpg:
+        return {
+            "available": False,
+            "note": "Insufficient goals/game data. Cannot estimate scores.",
+        }
+    
+    # Home advantage adjustment
+    home_lambda = home_gpg * 1.1
+    away_lambda = away_gpg * 0.9
+    
+    # Compute top scores (0-0 to 5-5)
+    scores = []
+    for h in range(6):
+        for a in range(6):
+            p = poisson_prob(home_lambda, h) * poisson_prob(away_lambda, a)
+            scores.append({
+                "score": f"{h}-{a}",
+                "home": h,
+                "away": a,
+                "probability": round(p * 100, 1),
+            })
+    
+    # Sort by probability descending, take top 10
+    scores.sort(key=lambda x: x["probability"], reverse=True)
+    top_scores = scores[:10]
+    total_prob = sum(s["probability"] for s in top_scores)
+    
+    # Most likely
+    best = top_scores[0]
+    
+    return {
+        "available": True,
+        "confidence": "low",
+        "note": "Based on Poisson model from average goals/game. High variance — reference only.",
+        "home_expected_goals": round(home_lambda, 2),
+        "away_expected_goals": round(away_lambda, 2),
+        "most_likely": best["score"],
+        "most_likely_probability": best["probability"],
+        "top_10_coverage": round(total_prob, 1),
+        "top_scores": top_scores,
     }
 
 
@@ -966,6 +1045,17 @@ def build_summary(valid_results: list[dict], conflicts: list[dict],
     ou = synthetic.get("over_under", {})
     parts.append(f"\n  Over/Under {ou.get('line', '2.5')}: Over {ou.get('over_probability', '?')} → {ou.get('direction', 'N/A')}")
     parts.append(f"  Confidence: {ou.get('confidence', '?')}")
+    
+    cs = synthetic.get("correct_score", {})
+    if cs.get("available"):
+        parts.append(f"\n  Correct Score (Poisson estimate — LOW confidence):")
+        parts.append(f"  Expected goals: Home {cs.get('home_expected_goals', '?')} | Away {cs.get('away_expected_goals', '?')}")
+        parts.append(f"  Most likely: {cs.get('most_likely', '?')} ({cs.get('most_likely_probability', '?')}%)")
+        parts.append(f"  Top 10 scores cover {cs.get('top_10_coverage', '?')}% of outcomes:")
+        for s in cs.get("top_scores", []):
+            parts.append(f"    {s['score']}: {s['probability']}%")
+    else:
+        parts.append(f"\n  Correct Score: {cs.get('note', 'Not available')}")
     
     # Recommendations (qualitative)
     parts.append(f"\n=== RECOMMENDATIONS ===")
