@@ -9,111 +9,99 @@ Key insight: sharp odds movement late before kickoff is the strongest signal.
 If the odds move AGAINST popular opinion, the bookmaker is likely right.
 If the odds move WITH popular opinion, it may be a trap.
 
+Uses The Odds API for multi-market odds (h2h, spreads, totals) across us,uk,eu regions.
+
 Usage:
     python odds_signals.py <fixture_id> <league_id> <season>
 """
 
 import sys
 import os
+from collections import Counter
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.api_football import (
-    get_fixture_by_id,
+from api.api_football import get_fixture_by_id
+from api.odds_api import (
+    get_sport_key,
     get_odds,
-    BET_MATCH_WINNER,
-    BET_ASIAN_HANDICAP,
-    BET_GOALS_OVER_UNDER,
-    BOOKMAKER_PINNACLE,
+    DEFAULT_REGIONS,
+    DEFAULT_MARKETS,
 )
 from utils import print_json, now_iso, implied_probability
 
-# Bookmakers to analyse for signals (ordered by market influence)
-SIGNAL_BOOKMAKERS = [BOOKMAKER_PINNACLE]  # Pinnacle is the sharpest market
 
+def analyse_odds_structure(odds_data: list[dict], home_team: str, away_team: str) -> dict:
+    """Analyse The Odds API response into a standard multi-market structure.
 
-def extract_odds_snapshot(odds_list: list[dict], bet_id: int) -> dict[str, dict]:
-    """Extract the best available odds for each outcome from the first bookmaker/bet combo.
-    
-    Returns {home_value: {odd, handicap}, away_value: {odd, handicap}, ...}
+    Returns:
+        {
+            "match_winner": {Home/Draw/Away: {bookmaker: price}},
+            "asian_handicap": {main_line: str, Home/Away: {bookmaker: {price, point}}},
+            "over_under": {main_line: str, Over/Under: {bookmaker: {price, point}}},
+        }
     """
-    if not odds_list:
-        return {}
-    
-    snapshot = {}
-    for entry in odds_list:
-        for bm in entry.get("bookmakers", []):
-            for bet in bm.get("bets", []):
-                if bet.get("id") == bet_id:
-                    for val in bet.get("values", []):
-                        key = val["value"]
-                        snapshot[key] = {
-                            "odd": float(val["odd"]),
-                            "handicap": val.get("handicap"),
-                        }
-                    if snapshot:
-                        return snapshot  # Take first bookmaker that has this bet
-    return snapshot
-
-
-def analyse_odds_structure(odds_list: list[dict]) -> dict:
-    """Analyse the full odds structure across all bookmakers and bet types."""
     result = {
         "match_winner": {},
         "asian_handicap": {},
         "over_under": {},
     }
-    
-    if not odds_list:
+
+    for match in odds_data:
+        if match.get("home_team") != home_team or match.get("away_team") != away_team:
+            continue
+
+        spread_points: list[float] = []
+        total_points: list[float] = []
+
+        for bm in match.get("bookmakers", []):
+            bm_name = bm.get("title", bm.get("key", "Unknown"))
+            for market in bm.get("markets", []):
+                mk = market.get("key")
+                outcomes = market.get("outcomes", [])
+
+                if mk == "h2h":
+                    for o in outcomes:
+                        if o["name"] == home_team:
+                            key = "Home"
+                        elif o["name"] == away_team:
+                            key = "Away"
+                        else:
+                            key = "Draw"
+                        result["match_winner"].setdefault(key, {})[bm_name] = o["price"]
+
+                elif mk == "spreads":
+                    for o in outcomes:
+                        key = "Home" if o["name"] == home_team else "Away"
+                        result["asian_handicap"].setdefault(key, {})[bm_name] = {
+                            "price": o["price"],
+                            "point": o.get("point", 0),
+                        }
+                        spread_points.append(o.get("point", 0))
+
+                elif mk == "totals":
+                    for o in outcomes:
+                        result["over_under"].setdefault(o["name"], {})[bm_name] = {
+                            "price": o["price"],
+                            "point": o.get("point", 0),
+                        }
+                        total_points.append(o.get("point", 0))
+
+        if spread_points:
+            main_pt = Counter(spread_points).most_common(1)[0][0]
+            result["asian_handicap"]["main_line"] = str(main_pt)
+        if total_points:
+            main_pt = Counter(total_points).most_common(1)[0][0]
+            result["over_under"]["main_line"] = str(main_pt)
+
         return result
-    
-    # Scan through all odds data once
-    for entry in odds_list:
-        for bm in entry.get("bookmakers", []):
-            bm_name = bm.get("name", "Unknown")
-            for bet in bm.get("bets", []):
-                bet_id = bet.get("id")
-                bet_name = bet.get("name", "")
-                values = bet.get("values", [])
-                
-                if bet_id == BET_MATCH_WINNER:
-                    for v in values:
-                        result["match_winner"].setdefault(v["value"], {})
-                        result["match_winner"][v["value"]][bm_name] = float(v["odd"])
-                
-                elif bet_id == BET_ASIAN_HANDICAP:
-                    handicap = vh = None
-                    for v in values:
-                        h = v.get("handicap", "0")
-                        if handicap is None:
-                            handicap = h
-                            vh = v
-                    if vh:
-                        result["asian_handicap"]["main_line"] = vh.get("handicap")
-                        for v in values:
-                            side = v["value"]
-                            result["asian_handicap"].setdefault(side, {})
-                            result["asian_handicap"][side][bm_name] = float(v["odd"])
-                
-                elif bet_id == BET_GOALS_OVER_UNDER:
-                    handicap = vh = None
-                    for v in values:
-                        h = v.get("handicap", "0")
-                        if handicap is None:
-                            handicap = h
-                            vh = v
-                    if vh:
-                        result["over_under"]["main_line"] = vh.get("handicap")
-                        for v in values:
-                            side = v["value"]
-                            result["over_under"].setdefault(side, {})
-                            result["over_under"][side][bm_name] = float(v["odd"])
-    
+
     return result
 
 
 def compute_return_rate(home_odds: float, draw_odds: float, away_odds: float) -> float:
     """Compute the bookmaker's return rate (1 - overround) for 1X2 market."""
-    total = 1/home_odds + 1/draw_odds + 1/away_odds
+    total = 1 / home_odds + 1 / draw_odds + 1 / away_odds
     return 1 / total
 
 
@@ -125,13 +113,12 @@ def compute_kelly_bet(home_odds: float, draw_odds: float, away_odds: float) -> d
     home_implied = implied_probability(home_odds)
     draw_implied = implied_probability(draw_odds)
     away_implied = implied_probability(away_odds)
-    
-    # Remove overround to get fair probabilities
+
     total_implied = home_implied + draw_implied + away_implied
     home_fair = home_implied / total_implied
     draw_fair = draw_implied / total_implied
     away_fair = away_implied / total_implied
-    
+
     return {
         "return_rate": round(return_rate, 4),
         "overround": round(1 - return_rate, 4),
@@ -144,19 +131,45 @@ def compute_kelly_bet(home_odds: float, draw_odds: float, away_odds: float) -> d
 
 
 def run(fixture_id: int, league_id: int, season: int) -> dict:
-    """Execute odds movement signal analysis."""
+    """Execute odds movement signal analysis using The Odds API."""
     fixture = get_fixture_by_id(fixture_id)
     if not fixture:
-        return {"agent": "odds_signals", "fixture_id": fixture_id, 
-                "error": "Fixture not found"}
-    
+        return {
+            "agent": "odds_signals",
+            "fixture_id": fixture_id,
+            "error": "Fixture not found",
+        }
+
     f = fixture[0]
     home_name = f["teams"]["home"]["name"]
     away_name = f["teams"]["away"]["name"]
-    
-    # Get pre-match odds with all bet types
-    odds_data = get_odds(fixture=fixture_id)
-    
+
+    sport_key = get_sport_key(league_id)
+    if not sport_key:
+        return {
+            "agent": "odds_signals",
+            "fixture": f"{home_name} vs {away_name}",
+            "finding": f"League {league_id} not mapped to an Odds API sport key",
+            "signal_strength": "none",
+            "key_metrics": {},
+            "notes": [
+                f"No sport key mapping for league_id={league_id}. "
+                "Add it to LEAGUE_TO_SPORT_KEY in odds_api.py."
+            ],
+        }
+
+    try:
+        odds_data = get_odds(sport_key, regions=DEFAULT_REGIONS, markets=DEFAULT_MARKETS)
+    except Exception as e:
+        return {
+            "agent": "odds_signals",
+            "fixture": f"{home_name} vs {away_name}",
+            "finding": f"Failed to fetch odds: {e}",
+            "signal_strength": "none",
+            "key_metrics": {},
+            "notes": [str(e)],
+        }
+
     if not odds_data:
         return {
             "agent": "odds_signals",
@@ -166,17 +179,15 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
             "key_metrics": {},
             "notes": ["Odds typically appear 1-3 days before kickoff"],
         }
-    
-    # Analyse odds structure
-    structure = analyse_odds_structure(odds_data)
-    
+
+    structure = analyse_odds_structure(odds_data, home_name, away_name)
+
     # 1X2 analysis
     mw = structure["match_winner"]
     home_odds = None
     away_odds = None
     draw_odds = None
-    
-    # Find best available odds
+
     for side in ("Home", "Draw", "Away"):
         if side in mw and mw[side]:
             best_odd = max(mw[side].values())
@@ -186,44 +197,42 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
                 draw_odds = best_odd
             else:
                 away_odds = best_odd
-    
-    kelly_data = {}
+
+    kelly_data: dict = {}
     if home_odds and draw_odds and away_odds:
         kelly_data = compute_kelly_bet(home_odds, draw_odds, away_odds)
-    
+
     # Asian handicap
     ah = structure["asian_handicap"]
     ah_line = ah.get("main_line", "N/A")
     ah_home_odds = None
     ah_away_odds = None
     if "Home" in ah and ah["Home"]:
-        ah_home_odds = max(ah["Home"].values())
+        ah_home_odds = max(v["price"] for v in ah["Home"].values())
     if "Away" in ah and ah["Away"]:
-        ah_away_odds = max(ah["Away"].values())
-    
+        ah_away_odds = max(v["price"] for v in ah["Away"].values())
+
     # Over/Under
     ou = structure["over_under"]
     ou_line = ou.get("main_line", "N/A")
     ou_over_odds = None
     ou_under_odds = None
     if "Over" in ou and ou["Over"]:
-        ou_over_odds = max(ou["Over"].values())
+        ou_over_odds = max(v["price"] for v in ou["Over"].values())
     if "Under" in ou and ou["Under"]:
-        ou_under_odds = max(ou["Under"].values())
-    
+        ou_under_odds = max(v["price"] for v in ou["Under"].values())
+
     # Signal interpretation
-    notes = []
-    finding_parts = []
-    
-    # Check overround — low = sharp market
+    notes: list[str] = []
+    finding_parts: list[str] = []
+
     if kelly_data.get("overround", 0) < 0.05:
         notes.append(f"Low overround ({kelly_data['overround']:.1%}): sharp market, efficient pricing")
     elif kelly_data.get("overround", 0) > 0.10:
         notes.append(f"High overround ({kelly_data['overround']:.1%}): wide margin, less signal value")
-    
+
     if ah_line and ah_line != "N/A":
         notes.append(f"Asian handicap main line: {ah_line}")
-        # If handicap is non-zero, bookmaker expects a gap
         try:
             line_val = float(ah_line)
             if abs(line_val) >= 1.0:
@@ -232,29 +241,27 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
                 notes.append(f"Shallow handicap ({ah_line}): bookmaker sees tight match")
         except ValueError:
             pass
-    
+
     if ou_line and ou_line != "N/A":
         notes.append(f"Goals O/U main line: {ou_line}")
-    
-    # Build finding
+
     if ah_line:
         finding_parts.append(f"AH line {ah_line}")
     if ou_line:
         finding_parts.append(f"O/U line {ou_line}")
-    
+
     finding = " | ".join(finding_parts) if finding_parts else "Odds data available, see key_metrics"
-    
+
     if kelly_data:
         finding += f" (return rate: {kelly_data.get('return_rate', 0):.1%})"
-    
-    # Determine signal strength based on data completeness
+
     if home_odds and ah_line and ou_line:
-        strength = "strong"  # All three markets available
+        strength = "strong"
     elif home_odds:
         strength = "medium"
     else:
         strength = "weak"
-    
+
     return {
         "agent": "odds_signals",
         "fixture": f"{home_name} vs {away_name}",
