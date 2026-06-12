@@ -1,13 +1,13 @@
 ---
 name: football-betting-analysis
-description: Use when the user wants to analyse football matches for betting purposes — covers 1X2, Asian handicap, and Over/Under markets. Use when the user asks for 比赛分析, 足彩分析, 盘口分析, 赔率分析, or wants to understand bookmaker pricing logic. Launches 6 parallel sub-agents for multi-dimensional analysis, then cross-validates to find value opportunities.
+description: Use when the user wants to analyse football matches for betting purposes — covers 1X2, Asian handicap, and Over/Under markets. Use when the user asks for 比赛分析, 足彩分析, 盘口分析, 赔率分析, or wants to understand bookmaker pricing logic. Launches 8 parallel sub-agents for multi-dimensional analysis, then cross-validates to find value opportunities.
 ---
 
 # Football Betting Analysis Skill
 
 ## Overview
 
-Reverse-engineer bookmaker pricing logic through 6 parallel analysis dimensions. Find the gap between what odds say and what fundamentals/statistics/history suggest — that gap is where betting value lives.
+Reverse-engineer bookmaker pricing logic through 8 parallel analysis dimensions. Find the gap between what odds say and what fundamentals/statistics/history suggest — that gap is where betting value lives.
 
 **Core principle:** Not predicting results. Finding mispricing.
 
@@ -24,14 +24,16 @@ Reverse-engineer bookmaker pricing logic through 6 parallel analysis dimensions.
 
 ```
 User request: "分析 fixture_id=X, league_id=Y, season=Z"
-  → Master agent (you): spawn 6 parallel sub-agents
+  → Master agent (you): spawn 8 parallel sub-agents
     ├── Sub-agent A: fundamentals.py (基本面 vs 盘口偏差)
     ├── Sub-agent B: odds_signals.py (盘口信号解读)
     ├── Sub-agent C: historical_backtest.py (历史同赔回测)
     ├── Sub-agent D: bookmaker_divergence.py (庄家分歧度)
     ├── Sub-agent E: market_sentiment.py (市场情绪)
-    └── Sub-agent F: objective_factors.py (客观因素)
-  → Wait for ALL 6 to complete
+    ├── Sub-agent F: objective_factors.py (客观因素)
+    ├── Sub-agent G: tactical_matchup.py (战术风格匹配)
+    └── Sub-agent H: player_coach_xg.py (球员教练+xG)
+  → Wait for ALL 8 to complete
   → Feed results to aggregator.py for cross-validation
   → Present final report to user
 ```
@@ -47,9 +49,9 @@ The user may provide:
 
 If IDs are missing, use the API to search for them before proceeding.
 
-### Step 2: Launch 6 sub-agents in PARALLEL
+### Step 2: Launch 8 sub-agents in PARALLEL
 
-Use the Task tool to spawn 6 sub-agents simultaneously. Each sub-agent runs one analysis script:
+Use the Task tool to spawn 8 sub-agents simultaneously. Each sub-agent runs one analysis script:
 
 ```
 Task 1 (fundamentals): 
@@ -70,18 +72,25 @@ Task 5 (market_sentiment):
 
 Task 6 (objective_factors):
   Run: python scripts/analysis/objective_factors.py <fixture_id> <league_id> <season>
+
+Task 7 (tactical_matchup):
+  Run: python scripts/analysis/tactical_matchup.py <fixture_id> <league_id> <season>
+
+Task 8 (player_coach_xg):
+  Run: python scripts/analysis/player_coach_xg.py <fixture_id> <league_id> <season>
 ```
 
 **CRITICAL RULES:**
-- All 6 sub-agents MUST be launched in parallel — NOT sequentially
+- All 8 sub-agents MUST be launched in parallel — NOT sequentially
 - Sub-agents are information-isolated — they do NOT share context or see each other's output
 - Each sub-agent returns JSON to stdout. Capture it.
 - If any sub-agent returns an error, record it and continue. A partial analysis is better than none.
 - Each sub-agent script requires `RAPIDAPI_KEY` in environment variables
+- For xG analysis (agent H), optionally install: `pip install soccerdata`
 
 ### Step 3: Run the aggregator
 
-After all 6 sub-agents complete, feed their collected JSON results to the aggregator:
+After all 8 sub-agents complete, feed their collected JSON results to the aggregator:
 
 ```
 Run: python scripts/aggregator.py <subagent_results.json>
@@ -139,6 +148,18 @@ python -c "from scripts.api.api_football import get_fixtures; from scripts.utils
 - **Line upgrade/downgrade**: Bookmaker adjusting risk exposure
 - **Return rate**: Low = efficient market, high = wide margin (less signal)
 
+### Reading Tactical Styles
+- **Formation counters**: 3-5-2 exploits 4-3-3 wide areas; 4-2-3-1 #10 finds gaps between midfield lines
+- **Possession vs Counter**: High possession teams vulnerable to quick transitions; low block teams struggle against sustained pressure
+- **Early vs Late scoring**: Teams that score early but concede late may drop points despite dominating
+- **Pressing intensity**: High press teams (>20 tackles/game) disrupt possession teams; low press invites pressure
+
+### Using xG (Expected Goals)
+- Install soccerdata for real xG: `pip install soccerdata`
+- xG > actual goals = wasteful finishing, likely to regress
+- xG < actual goals = clinical finishing, may be unsustainable
+- Large xG discrepancy (5+ matches) = strongest signal for over/under bets
+
 ### Contrarian Indicators
 - Public heavily on one side + odds NOT moving = bookmaker confident, traps being set
 - Sharp bookmakers (Pinnacle) disagree with retail (Bet365) = follow the sharps
@@ -151,7 +172,7 @@ Final report follows this structure:
 📊 比赛: [Home] vs [Away] | [Date]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🔍 六维分析摘要:
+🔍 八维分析摘要:
   [fundamentals]: [finding] (信号强度: strong/medium/weak)
   [odds_signals]: [finding] (信号强度: ...)
   ...
