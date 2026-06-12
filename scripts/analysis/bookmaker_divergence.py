@@ -17,7 +17,7 @@ import os
 import statistics
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.api_football import get_fixture_by_id
+from api.football_data import get_match
 from api.odds_api import (
     get_sport_key,
     get_odds,
@@ -150,14 +150,13 @@ def analyse_divergence_level(divergence_data: dict) -> tuple[str, list[str]]:
 
 def run(fixture_id: int, league_id: int, season: int) -> dict:
     """Execute multi-bookmaker divergence analysis using The Odds API."""
-    fixture = get_fixture_by_id(fixture_id)
-    if not fixture:
+    match = get_match(fixture_id)
+    if not match:
         return {"agent": "bookmaker_divergence", "fixture_id": fixture_id,
-                "error": "Fixture not found"}
+                "error": "Match not found"}
 
-    f = fixture[0]
-    home_name = f["teams"]["home"]["name"]
-    away_name = f["teams"]["away"]["name"]
+    home_name = match["homeTeam"]["name"]
+    away_name = match["awayTeam"]["name"]
 
     sport_key = get_sport_key(league_id)
     if not sport_key:
