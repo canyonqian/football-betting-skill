@@ -133,6 +133,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
             pass
     
     # Sharp vs retail comparison
+    public_bias = compare_sharp_vs_retail(h2h_odds)
     
     # Build sentiment interpretation
     notes = []

@@ -122,16 +122,56 @@ def _parse_hafu(hafu: Optional[dict]) -> Optional[dict]:
     }
 
 
+# English → Chinese team name mapping for cross-language search
+EN_TO_CN = {
+    "canada": "加拿大", "usa": "美国", "united states": "美国", "us": "美国",
+    "mexico": "墨西哥", "brazil": "巴西", "argentina": "阿根廷",
+    "bosnia": "波黑", "bosnia-herzegovina": "波黑", "bosnia herzegovina": "波黑",
+    "bosnia and herzegovina": "波黑",
+    "paraguay": "巴拉圭", "morocco": "摩洛哥", "qatar": "卡塔尔",
+    "switzerland": "瑞士", "serbia": "塞尔维亚", "croatia": "克罗地亚",
+    "england": "英格兰", "france": "法国", "germany": "德国",
+    "spain": "西班牙", "italy": "意大利", "netherlands": "荷兰",
+    "portugal": "葡萄牙", "belgium": "比利时", "uruguay": "乌拉圭",
+    "colombia": "哥伦比亚", "chile": "智利", "peru": "秘鲁",
+    "ecuador": "厄瓜多尔", "japan": "日本", "korea": "韩国",
+    "south korea": "韩国", "australia": "澳大利亚", "iran": "伊朗",
+    "saudi arabia": "沙特", "senegal": "塞内加尔", "ghana": "加纳",
+    "cameroon": "喀麦隆", "nigeria": "尼日利亚", "egypt": "埃及",
+    "tunisia": "突尼斯", "algeria": "阿尔及利亚", "south africa": "南非",
+    "denmark": "丹麦", "sweden": "瑞典", "norway": "挪威",
+    "poland": "波兰", "austria": "奥地利", "turkey": "土耳其",
+    "greece": "希腊", "russia": "俄罗斯", "ukraine": "乌克兰",
+    "czech": "捷克", "romania": "罗马尼亚", "hungary": "匈牙利",
+    "scotland": "苏格兰", "wales": "威尔士", "ireland": "爱尔兰",
+    "venezuela": "委内瑞拉", "bolivia": "玻利维亚", "costa rica": "哥斯达黎加",
+    "panama": "巴拿马", "jamaica": "牙买加", "honduras": "洪都拉斯",
+    "new zealand": "新西兰", "haiti": "海地",
+}
+
+
+def _cn_name(english_name: str) -> str:
+    """Map English team name to Chinese for 竞彩 search."""
+    lower = english_name.lower().strip()
+    return EN_TO_CN.get(lower, english_name)
+
+
 def search_by_teams(home_team: str, away_team: str) -> Optional[dict]:
-    """Search for a match by team names (fuzzy match)."""
+    """Search for a match by team names (fuzzy match, Chinese or English)."""
+    cn_home = _cn_name(home_team)
+    cn_away = _cn_name(away_team)
     days = _fetch()
     for day in days:
         for sub in day.get("subMatchList", []):
             h = sub.get("homeTeamAllName", "")
             a = sub.get("awayTeamAllName", "")
-            if (home_team.lower() in h.lower() and away_team.lower() in a.lower()):
+            # Try Chinese name match first, then English fuzzy
+            home_ok = cn_home in h or home_team.lower() in h.lower()
+            away_ok = cn_away in a or away_team.lower() in a.lower()
+            if home_ok and away_ok:
                 return _parse_sporttery_odds(sub)
-            if (home_team.lower() in a.lower() and away_team.lower() in h.lower()):
+            # Try reversed
+            if (cn_home in a or home_team.lower() in a.lower()) and (cn_away in h or away_team.lower() in h.lower()):
                 sub["homeTeamAllName"], sub["awayTeamAllName"] = sub["awayTeamAllName"], sub["homeTeamAllName"]
                 sub["homeTeamAbbName"], sub["awayTeamAbbName"] = sub["awayTeamAbbName"], sub["homeTeamAbbName"]
                 if "had" in sub and sub["had"]:
