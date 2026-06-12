@@ -32,6 +32,18 @@ pip install requests
 pip install soccerdata    # optional, for real xG data
 ```
 
+### If the skill doesn't appear after install
+
+Each agent has its own skills directory. If `npx skills add` doesn't make the skill appear, copy manually:
+
+| Agent | Command |
+|-------|---------|
+| OpenCode | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.config\opencode\skills\football-betting-analysis\` |
+| Claude Code | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.claude\skills\football-betting-analysis\` |
+| Cursor | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.cursor\skills\football-betting-analysis\` |
+
+**Restart the agent after copying** — skills are loaded at startup.
+
 ## API Keys
 
 **Two free API keys are required:**
