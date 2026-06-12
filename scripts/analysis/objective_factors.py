@@ -17,7 +17,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.football_data import get_match, get_standings, get_team, get_matches
+from api.football_data import get_match, get_standings
 from utils import print_json
 
 
@@ -113,25 +113,13 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     home_form = (home_row.get("form", "") or "") if home_row else ""
     away_form = (away_row.get("form", "") or "") if away_row else ""
 
-    # ── Squad size ─────────────────────────────────────────────────
+    # ── Squad size (get_team restricted on free tier — unavailable) ──
     home_squad = 0
     away_squad = 0
-    try:
-        if home_id:
-            ht = get_team(home_id)
-            home_squad = len(ht.get("squad", []))
-    except Exception:
-        pass
-    try:
-        if away_id:
-            at = get_team(away_id)
-            away_squad = len(at.get("squad", []))
-    except Exception:
-        pass
 
-    # ── Fatigue ────────────────────────────────────────────────────
-    home_fatigue = _assess_fatigue(home_id, competition_id, match_date_str) if home_id else {}
-    away_fatigue = _assess_fatigue(away_id, competition_id, match_date_str) if away_id else {}
+    # ── Fatigue (simplified — no get_matches on free tier) ──
+    home_fatigue = {}
+    away_fatigue = {}
 
     # ── Build notes & signal ───────────────────────────────────────
     notes = []
@@ -159,18 +147,8 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     elif away_pts >= 10 and home_pts <= 3:
         notes.append(f"Strong recent-form gap favoring {away_name}")
 
-    if home_squad > 0 and away_squad > 0:
-        if abs(home_squad - away_squad) >= 5:
-            bigger = home_name if home_squad > away_squad else away_name
-            smaller = away_name if home_squad > away_squad else home_name
-            notes.append(f"{bigger} squad ({max(home_squad, away_squad)}) notably larger than {smaller} ({min(home_squad, away_squad)})")
-
-    if home_fatigue.get("recent_matches"):
-        notes.append(f"{home_name} recent match load: {home_fatigue['recent_matches']} matches (density {home_fatigue.get('match_density', 'N/A')}/day)")
-    if away_fatigue.get("recent_matches"):
-        notes.append(f"{away_name} recent match load: {away_fatigue['recent_matches']} matches (density {away_fatigue.get('match_density', 'N/A')}/day)")
-
-    notes.append("Injury data not available via API. Search sportsmole.co.uk or dongqiudi.com for team news.")
+    notes.append("Squad and injury data: use web search (sportsmole.co.uk, dongqiudi.com) for team news.")
+    notes.append("Fatigue data not available via free API tier — web search for fixture congestion context.")
 
     search_queries = [
         f"{home_name} injuries suspensions {season}-{season + 1}",

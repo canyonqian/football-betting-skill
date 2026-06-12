@@ -9,16 +9,13 @@ Usage:
 
 import sys
 import os
+import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.football_data import get_match, get_standings, get_team, get_head2head
+from api.football_data import get_match, get_standings, get_head2head
 from utils import print_json
 
-try:
-    from soccerdata import FBref
-    HAS_SOCCERDATA = True
-except ImportError:
-    HAS_SOCCERDATA = False
+HAS_SOCCERDATA = False  # soccerdata import can cause network issues; disabled for now
 
 FORMATION_COUNTERS = {
     "3-5-2": ["4-3-3", "4-2-3-1", "4-4-2"],
@@ -42,17 +39,9 @@ def get_style_from_fbref(competition_id: str, season: int) -> dict:
     """Get per-game stats from FBref via soccerdata."""
     if not HAS_SOCCERDATA:
         return {"available": False, "note": "soccerdata not installed"}
-    league = COMP_TO_FBREF.get(competition_id)
-    if not league:
-        return {"available": False, "note": f"Competition {competition_id} not in FBref"}
-    try:
-        fbref = FBref(league, str(season))
-        schedule = fbref.read_schedule()
-        if schedule is not None and not schedule.empty:
-            return {"available": True, "matches": len(schedule)}
-        return {"available": True, "matches": 0}
-    except Exception as e:
-        return {"available": False, "note": str(e)[:100]}
+    return {"available": False, "note": "soccerdata disabled"}
+    # Note: full soccerdata integration requires FBref initialization
+    # which can trigger network requests and exceed rate limits
 
 
 def get_league_position(standings: list, team_id: int) -> int:
@@ -64,60 +53,36 @@ def get_league_position(standings: list, team_id: int) -> int:
     return 0
 
 
-def classify_style(team_data: dict, league_pos: int) -> dict:
-    """Classify team style from available data (no API-Football stats)."""
+def classify_style(team_name: str, league_pos: int) -> dict:
+    """Classify team style from available data."""
     tags = []
-    coach = team_data.get("coach", {})
-    squad = team_data.get("squad", [])
-    squad_size = len(squad)
-
     if league_pos <= 4:
         tags.append("top-tier")
     elif league_pos >= 15:
         tags.append("struggling")
     else:
         tags.append("mid-table")
-
-    if squad_size >= 28:
-        tags.append("deep-squad")
-    elif squad_size <= 22:
-        tags.append("thin-squad")
-
     return {
+        "team": team_name,
         "league_position": league_pos,
-        "squad_size": squad_size,
-        "coach_name": coach.get("name", "Unknown") if coach else "Unknown",
         "style_tags": tags,
     }
 
 
-def compute_clash(home_info: dict, away_info: dict, home_form: str, away_form: str,
-                  formation_notes: list) -> dict:
+def compute_clash(home_info: dict, away_info: dict, formation_notes: list) -> dict:
     """Compute tactical compatibility."""
     clashes = []
     advantages = []
 
     home_pos = home_info.get("league_position", 10)
     away_pos = away_info.get("league_position", 10)
+    home_name = home_info.get("team", "Home")
+    away_name = away_info.get("team", "Away")
 
     if home_pos <= 4 and away_pos >= 15:
-        advantages.append(f"{home_info.get('coach_name')} top-4 side vs struggling {away_info.get('coach_name')}")
+        advantages.append(f"{home_name} top-4 side vs struggling {away_name}")
     if away_pos <= 4 and home_pos >= 15:
-        advantages.append(f"{away_info.get('coach_name')} top-4 side vs struggling {home_info.get('coach_name')}")
-
-    if home_info.get("squad_size", 0) >= 28:
-        advantages.append(f"Deep home squad ({home_info['squad_size']} players) — rotation advantage")
-    if away_info.get("squad_size", 0) >= 28:
-        advantages.append(f"Deep away squad ({away_info['squad_size']} players) — rotation advantage")
-
-    # Strong form vs weak form
-    if home_form and away_form:
-        h_wins = home_form.count("W") / max(len(home_form), 1) if home_form else 0
-        a_wins = away_form.count("W") / max(len(away_form), 1) if away_form else 0
-        if h_wins > a_wins + 0.3:
-            advantages.append(f"Home in significantly better form ({h_wins:.0%} vs {a_wins:.0%})")
-        if a_wins > h_wins + 0.3:
-            advantages.append(f"Away in significantly better form ({a_wins:.0%} vs {h_wins:.0%})")
+        advantages.append(f"{away_name} top-4 side vs struggling {home_name}")
 
     return {
         "key_clashes": clashes,
@@ -137,9 +102,9 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     home_id = match["homeTeam"]["id"]
     away_id = match["awayTeam"]["id"]
 
-    # Team info (squad, coach)
-    home_team = get_team(home_id) or {}
-    away_team = get_team(away_id) or {}
+    # Team info — get_team() restricted on free tier, use standings + match data instead
+    home_team = {"name": home_name, "id": home_id}
+    away_team = {"name": away_name, "id": away_id}
 
     # Standings
     standings = get_standings(competition_id)
@@ -147,12 +112,12 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     away_pos = get_league_position(standings, away_id)
 
     # Style classification
-    home_style = classify_style(home_team, home_pos)
-    away_style = classify_style(away_team, away_pos)
+    home_style = classify_style(home_name, home_pos)
+    away_style = classify_style(away_name, away_pos)
 
-    # Form from team data
-    home_form = home_team.get("form", "")
-    away_form = away_team.get("form", "")
+    # Form from standings/position (no team endpoint data)
+    home_form = ""
+    away_form = ""
 
     # H2H context
     try:
@@ -168,7 +133,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     fbref_data = get_style_from_fbref(competition_id, season)
 
     # Clash analysis
-    clash = compute_clash(home_style, away_style, home_form, away_form, formation_notes)
+    clash = compute_clash(home_style, away_style, formation_notes)
 
     notes = []
     if fbref_data.get("available"):
