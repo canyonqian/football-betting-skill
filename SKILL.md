@@ -30,50 +30,58 @@ Reverse-engineer bookmaker pricing logic through 8 parallel analysis dimensions.
 ## Architecture
 
 ```
-User request: "Analyze fixture_id=X, league_id=Y, season=Z"
+User request: "Analyze Brazil vs Germany"
   → Master agent (you): spawn 8 parallel sub-agents
-    ├── A: fundamentals.py      (form/H2H/standings vs odds gap)
-    ├── B: odds_signals.py       (odds movement & bookmaker intent)
-    ├── C: historical_backtest.py(odds pattern backtesting)
-    ├── D: bookmaker_divergence.py(multi-bookmaker dispersion)
-    ├── E: market_sentiment.py   (public bias & contrarian signals)
-    ├── F: objective_factors.py  (injuries, fatigue, squad depth)
-    ├── G: tactical_matchup.py   (formations, style clash, goal timing)
-    └── H: player_coach_xg.py    (player impact, coach profile, xG proxy)
+    ├── A: fundamentals.py        (form, H2H, standings from football-data.org)
+    ├── B: odds_signals.py        (odds movement from The Odds API)
+    ├── C: historical_backtest.py (league baseline from football-data.org)
+    ├── D: bookmaker_divergence.py(40+ bookmaker dispersion from The Odds API)
+    ├── E: market_sentiment.py    (sharp/retail odds + web search predictions)
+    ├── F: objective_factors.py   (web search: injuries, squad, fatigue)
+    ├── G: tactical_matchup.py    (web search: lineups/formations + soccerdata stats)
+    └── H: player_coach_xg.py     (soccerdata xG + web search coach/player data)
   → Wait for ALL 8 to complete
-  → Feed results to aggregator for cross-validation
+  → Feed results to aggregator for cross-validation + adversarial review
   → Present final report to user
+
+Data sources:
+  football-data.org (10 req/min) → fixtures, standings, H2H, results
+  soccerdata (no limits)         → xG, per-game stats, player data
+  The Odds API (500 credits/mo)  → odds from 40+ bookmakers
+  Web search                     → injuries, lineups, coach, team news
 ```
 
 ## Execution Protocol
 
-### Step 0: Verify API Keys
+### Step 0: Verify API Keys + Dependencies
 
-Two API keys are required. Check both before starting:
+Three things to check before starting:
 
-**1. FOOTBALL_API_KEY** (team/player/stats data):
+**1. FOOTBALL_DATA_KEY** (match data):
 ```bash
-if (-not $env:FOOTBALL_API_KEY) { Write-Output "MISSING: FOOTBALL_API_KEY" }
+if (-not $env:FOOTBALL_DATA_KEY) { Write-Output "MISSING: FOOTBALL_DATA_KEY" }
 ```
-Register: https://dashboard.api-football.com/register (free, 100 req/day)
+Register: https://www.football-data.org/client/register (free, 10 req/min)
 
-**2. ODDS_API_KEY** (odds data from 40+ bookmakers):
+**2. ODDS_API_KEY** (odds data):
 ```bash
 if (-not $env:ODDS_API_KEY) { Write-Output "MISSING: ODDS_API_KEY" }
 ```
 Register: https://the-odds-api.com/#get-access (free, 500 credits/month)
 
-If either key is missing, **STOP and tell the user exactly which key is missing and where to register it.** Do NOT proceed without both keys.
+**3. soccerdata** (xG + detailed stats, optional):
+```bash
+pip install soccerdata 2>$null; python -c "import soccerdata; print('soccerdata: OK')"
+```
+If not installed, agents G and H will have reduced capability.
+
+If either API key is missing, **STOP and tell the user exactly which key is missing and where to register it.**
 
 ```bash
-# Quick verify both keys work
-python -c "from scripts.api.api_football import _headers; _headers(); print('FOOTBALL_API_KEY: OK')"
-python -c "from scripts.api.odds_api import get_sports; s = get_sports(); print(f'ODDS_API_KEY: OK — {len(s)} sports available')"
+# Quick verify
+python -c "from scripts.api.football_data import get_competitions; c=get_competitions(); print(f'FOOTBALL_DATA_KEY: OK — {len(c)} competitions')"
+python -c "from scripts.api.odds_api import get_sports; s=get_sports(); print(f'ODDS_API_KEY: OK — {len(s)} sports')"
 ```
-
-**Data source split:**
-- FOOTBALL_API_KEY → API-Football: teams, players, fixtures, standings, statistics, injuries, lineups, predictions
-- ODDS_API_KEY → The Odds API: 1X2 odds, spreads, totals from 40+ bookmakers with historical data
 
 ### Step 1: Parse the user request
 
@@ -117,11 +125,24 @@ Task 8 (player_coach_xg):
 
 **CRITICAL RULES:**
 - All 8 sub-agents MUST be launched in parallel — NOT sequentially
-- Sub-agents A-F require `FOOTBALL_API_KEY`. Sub-agents B,C,D require `ODDS_API_KEY`.
 - Sub-agents are information-isolated — they do NOT share context or see each other's output
 - Each sub-agent returns JSON to stdout. Capture it.
-- If any sub-agent returns an error, record it and continue. A partial analysis is better than none.
-- For xG analysis (agent H), optionally install: `pip install soccerdata`
+- If any sub-agent returns an error, record it and continue
+- Agents F, G, H use **web search** for real-time data. See web search section below.
+- Install: `pip install requests soccerdata`
+
+### Web Search: Recommended Sites
+
+When API data is incomplete, use these GFW-accessible, structured-data websites:
+
+| Category | Sites |
+|----------|-------|
+| Injuries / Team News | sportsmole.co.uk, goal.com/en, besoccer.com |
+| Lineups / Formations | flashscore.com, sofascore.com, int.soccerway.com |
+| Coach Info | footballcritic.com, soccerbase.com |
+| Player Stats | sofascore.com, fotmob.com |
+| Predictions / Previews | sportsmole.co.uk, livescore.com |
+| Chinese sources | dongqiudi.com (懂球帝), hupu.com (虎扑) |
 
 ### Step 3: Run the aggregator
 
@@ -181,42 +202,37 @@ Or apply the cross-validation logic from `aggregator.py` directly in your reason
 
 ## API Setup
 
-Before analysis, ensure:
+Two free API keys required:
 ```bash
-set FOOTBALL_API_KEY=your_key_here
+set FOOTBALL_DATA_KEY=your_key_here   # https://www.football-data.org/client/register
+set ODDS_API_KEY=your_key_here        # https://the-odds-api.com/#get-access
 ```
-
-Get an API key from: https://dashboard.api-football.com/register
-Sign up for the free tier (100 requests/day). No credit card required.
+Install deps: `pip install requests soccerdata`
 
 **If rate limit is hit:** Report the error clearly. User can upgrade their plan for more requests.
 
-## Looking Up IDs
+## Looking Up Competition IDs
 
-When user provides team names instead of IDs:
+football-data.org uses different competition codes. Search with:
 
 ```bash
-# Search for league ID
-python -c "from scripts.api.api_football import get_leagues; from scripts.utils import print_json; print_json(get_leagues(search='World Cup'))"
+# List available competitions
+python -c "from scripts.api.football_data import get_competitions; from scripts.utils import print_json; print_json(get_competitions())"
 
-# Search for team ID  
-python -c "from scripts.api.api_football import get_teams; from scripts.utils import print_json; print_json(get_teams(name='Brazil'))"
-
-# Find fixtures
-python -c "from scripts.api.api_football import get_fixtures; from scripts.utils import print_json; print_json(get_fixtures(league_id=X, season=2026, team_id=Y))"
+# Get teams in a competition
+python -c "from scripts.api.football_data import get_standings; from scripts.utils import print_json; print_json(get_standings('<competition_id>'))"
 ```
 
-## Quick Reference: Common League IDs
+If you can't find a competition code, web search `"player name" + "recent matches"` to find team/league context.
 
-| Competition | League ID | Common Seasons |
-|------------|-----------|----------------|
-| World Cup | 1 | 2022, 2026 |
-| UEFA Euro | 4 | 2024, 2028 |
-| Premier League | 39 | 2022, 2023, 2024, 2025 |
-| La Liga | 140 | 2022, 2023, 2024, 2025 |
-| Bundesliga | 78 | 2022, 2023, 2024, 2025 |
-| Serie A | 135 | 2022, 2023, 2024, 2025 |
-| Ligue 1 | 61 | 2022, 2023, 2024, 2025 |
-| Champions League | 2 | 2022, 2023, 2024, 2025 |
-| CSL | 169 | 2022, 2023, 2024, 2025 |
-| J-League | 98 | 2022, 2023, 2024, 2025 |
+## Quick Reference: Common Competition IDs
+
+| Competition | football-data.org ID |
+|------------|---------------------|
+| Premier League | PL |
+| Bundesliga | BL1 |
+| Serie A | SA |
+| La Liga | PD |
+| Ligue 1 | FL1 |
+| Champions League | CL |
+| World Cup | WC |
