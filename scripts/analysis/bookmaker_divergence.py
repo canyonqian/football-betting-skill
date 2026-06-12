@@ -25,6 +25,8 @@ from api.odds_api import (
     extract_spreads,
     extract_totals,
 )
+from api.odds_api_io import get_events as io_get_events, get_odds as io_get_odds, find_event_id as io_find_event_id, extract_odds_summary
+from api.sporttery import search_by_teams, get_world_cup_matches
 from utils import print_json
 
 # Sharp bookmakers — historically most efficient, market-leading prices
@@ -172,14 +174,60 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     spread_odds = extract_spreads(odds_data, home_name, away_name)
     total_odds = extract_totals(odds_data, home_name, away_name)
 
+    source_label = "The Odds API"
+    all_fallback_notes = []
+
+    # Fallback to odds-api.io if The Odds API has no data
+    if not h2h_odds and not spread_odds and not total_odds:
+        try:
+            io_event_id = io_find_event_id(home_name, away_name)
+            if io_event_id:
+                io_data = io_get_odds(io_event_id, bookmakers="Bet365,Unibet")
+                io_summary = extract_odds_summary(io_data)
+                io_h2h = {}
+                for book, markets in io_summary.items():
+                    if "ML" in markets:
+                        ml = markets["ML"][0]
+                        io_h2h[book] = {
+                            "Home": float(ml.get("home", 0)) or 0,
+                            "Draw": float(ml.get("draw", 0)) or 0,
+                            "Away": float(ml.get("away", 0)) or 0,
+                        }
+                if len(io_h2h) >= 2:
+                    h2h_odds = {}
+                    for book, ml in io_h2h.items():
+                        h2h_odds[book] = ml
+                    source_label = "odds-api.io"
+                    all_fallback_notes.append(f"Source: odds-api.io ({', '.join(io_h2h.keys())})")
+        except Exception:
+            pass
+
+    # Final fallback to sporttery
+    if not h2h_odds and not spread_odds and not total_odds:
+        try:
+            sp_data = search_by_teams(home_name, away_name)
+            if not sp_data:
+                for wc in get_world_cup_matches():
+                    if home_name.lower() in wc["home_team"].lower() or home_name.lower() in wc["away_team"].lower():
+                        sp_data = wc
+                        break
+            if sp_data and sp_data.get("odds", {}).get("h2h"):
+                h2h = sp_data["odds"]["h2h"]
+                if h2h.get("home"):
+                    h2h_odds = {"竞彩": {"Home": h2h["home"], "Draw": h2h["draw"] or 0, "Away": h2h["away"] or 0}}
+                    source_label = "竞彩网"
+                    all_fallback_notes.append("Source: 竞彩网 (Chinese government lottery)")
+        except Exception:
+            pass
+
     if not h2h_odds and not spread_odds and not total_odds:
         return {
             "agent": "bookmaker_divergence",
             "fixture": f"{home_name} vs {away_name}",
-            "finding": "No odds data available",
+            "finding": "No odds data available from any source",
             "signal_strength": "none",
             "key_metrics": {},
-            "notes": ["Odds not yet published for this fixture on The Odds API"],
+            "notes": ["The Odds API, odds-api.io, and 竞彩网 all returned no data"],
         }
 
     h2h_div = compute_divergence(h2h_odds)
@@ -190,7 +238,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     spread_level, spread_notes = analyse_divergence_level(spread_div)
     total_level, total_notes = analyse_divergence_level(total_div)
 
-    all_notes = h2h_notes + spread_notes + total_notes
+    all_notes = h2h_notes + spread_notes + total_notes + all_fallback_notes
 
     total_bookmakers = len(set(
         list(h2h_odds.keys()) + list(spread_odds.keys()) + list(total_odds.keys())
@@ -198,7 +246,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     sharp_count = sum(1 for bm in {*h2h_odds, *spread_odds, *total_odds} if bm in SHARP_BOOKMAKERS)
     retail_count = sum(1 for bm in {*h2h_odds, *spread_odds, *total_odds} if bm in RETAIL_BOOKMAKERS)
 
-    finding = f"{total_bookmakers} bookmakers via The Odds API ({sharp_count} sharp, {retail_count} retail)"
+    finding = f"{total_bookmakers} bookmakers via {source_label} ({sharp_count} sharp, {retail_count} retail)"
     if h2h_level in ("very_low", "low"):
         finding += " — strong consensus"
     elif h2h_level == "high":
@@ -208,7 +256,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
 
     return {
         "agent": "bookmaker_divergence",
-        "source": "the_odds_api",
+        "source": source_label.lower().replace(" ", "_"),
         "sport_key": sport_key,
         "fixture": f"{home_name} vs {away_name}",
         "finding": finding,

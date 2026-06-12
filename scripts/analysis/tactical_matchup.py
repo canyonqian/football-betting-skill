@@ -13,6 +13,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api.football_data import get_match, get_standings, get_head2head
+from api.scraper import FlashscoreScraper
 from utils import print_json
 
 HAS_SOCCERDATA = False  # soccerdata import can cause network issues; disabled for now
@@ -126,8 +127,43 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     except Exception:
         h2h_count = 0
 
-    # Formation analysis via web search (can't get from football-data.org)
-    formation_notes = [f"Formations not available from football-data.org. Web search flashscore.com for {home_name} vs {away_name} lineups."]
+    # Formation analysis via Flashscore scraper
+    formation_notes = []
+    lineups_data = {}
+    try:
+        scraper = FlashscoreScraper(headless=True, timeout=30000)
+        matches = scraper.search_match(home_name, away_name)
+        if matches:
+            # Find best match (prefer exact team name match)
+            match_url = None
+            for m in matches:
+                txt = m.get("text", "")
+                if home_name.lower() in txt.lower() and away_name.lower() in txt.lower():
+                    match_url = m["url"]
+                    break
+            if not match_url and matches:
+                match_url = matches[0]["url"]
+
+            if match_url:
+                ld = scraper.get_match_data(match_url)
+                lineups_data = ld
+
+                for team, formation in ld.get("formations", {}).items():
+                    formation_notes.append(f"{team} probable formation: {formation}")
+
+                for team, xi in ld.get("starting_xi", {}).items():
+                    if xi:
+                        names = [p["name"] for p in xi[:5]]
+                        formation_notes.append(f"{team} likely XI: {', '.join(names)}{'...' if len(xi) > 5 else ''}")
+
+                injuries = ld.get("injuries", [])
+                for inj in injuries:
+                    formation_notes.append(f"Injury — {inj['team']}: {inj['player']} ({inj['reason']})")
+
+                if formation_notes:
+                    formation_notes.append("Source: Flashscore predicted lineups")
+    except Exception:
+        formation_notes.append(f"Formation data unavailable from Flashscore. Web search for {home_name} vs {away_name} lineups.")
 
     # Soccerdata stats
     fbref_data = get_style_from_fbref(competition_id, season)
@@ -163,6 +199,11 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
             "style_clash": clash,
             "soccerdata": fbref_data,
             "h2h_count": h2h_count,
+            "formations": lineups_data.get("formations", {}),
+            "lineups": {
+                "home_starting_xi": lineups_data.get("starting_xi", {}).get(home_name, []),
+                "away_starting_xi": lineups_data.get("starting_xi", {}).get(away_name, []),
+            } if lineups_data else {},
         },
         "notes": notes,
         "search_queries": [

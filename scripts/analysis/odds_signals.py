@@ -9,7 +9,10 @@ Key insight: sharp odds movement late before kickoff is the strongest signal.
 If the odds move AGAINST popular opinion, the bookmaker is likely right.
 If the odds move WITH popular opinion, it may be a trap.
 
-Uses The Odds API for multi-market odds (h2h, spreads, totals) across us,uk,eu regions.
+Data sources (tried in order):
+  1. The Odds API (40+ bookmakers, international)
+  2. odds-api.io (Bet365 + Unibet, deep markets)
+  3. 竞彩网 sporttery.cn (Chinese government lottery)
 
 Usage:
     python odds_signals.py <fixture_id> <league_id> <season>
@@ -28,6 +31,8 @@ from api.odds_api import (
     DEFAULT_REGIONS,
     DEFAULT_MARKETS,
 )
+from api.odds_api_io import get_events as io_get_events, get_odds as io_get_odds, find_event_id as io_find_event_id, extract_odds_summary
+from api.sporttery import search_by_teams, get_world_cup_matches
 from utils import print_json, now_iso, implied_probability
 
 
@@ -157,29 +162,132 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
             ],
         }
 
+    structure = {}
+    source = "the_odds_api"
+    all_notes = []
+    match_winner_odds = {}
+
+    # Try The Odds API first
     try:
         odds_data = get_odds(sport_key, regions=DEFAULT_REGIONS, markets=DEFAULT_MARKETS)
-    except Exception as e:
+        if odds_data:
+            structure = analyse_odds_structure(odds_data, home_name, away_name)
+            mw = structure.get("match_winner", {})
+            if mw.get("Home") or mw.get("Away") or mw.get("Draw"):
+                source = "the_odds_api"
+                all_notes.append(f"Source: The Odds API ({len(mw.get('Home',{})) + len(mw.get('Draw',{})) + len(mw.get('Away',{}))} bookmakers)")
+    except Exception:
+        pass
+
+    # Try odds-api.io as fallback/supplement
+    if not structure.get("match_winner"):
+        try:
+            io_event_id = io_find_event_id(home_name, away_name)
+            if io_event_id:
+                io_data = io_get_odds(io_event_id, bookmakers="Bet365,Unibet")
+                io_summary = extract_odds_summary(io_data)
+                io_home = None
+                io_draw = None
+                io_away = None
+                io_ah_home = None
+                io_ah_away = None
+                io_ou_over = None
+                io_ou_under = None
+                io_ou_line = None
+
+                for book, markets in io_summary.items():
+                    if "ML" in markets:
+                        ml = markets["ML"][0]
+                        h = float(ml.get("home", 0)) or None
+                        d = float(ml.get("draw", 0)) or None
+                        a = float(ml.get("away", 0)) or None
+                        if h and (not io_home or h > io_home): io_home = h
+                        if d and (not io_draw or d > io_draw): io_draw = d
+                        if a and (not io_away or a > io_away): io_away = a
+
+                    if "Spread" in markets:
+                        for s in markets["Spread"]:
+                            pt = float(s.get("hdp", 0))
+                            h = float(s.get("home", 0)) or None
+                            a = float(s.get("away", 0)) or None
+                            if abs(pt) <= 1.0:
+                                if h and (not io_ah_home or h > io_ah_home): io_ah_home = h
+                                if a and (not io_ah_away or a > io_ah_away): io_ah_away = a
+
+                    if "Totals" in markets:
+                        for t in markets["Totals"]:
+                            pt = float(t.get("hdp", 0))
+                            ov = float(t.get("over", 0)) or None
+                            un = float(t.get("under", 0)) or None
+                            if abs(pt - 2.5) <= 0.5:
+                                io_ou_line = str(pt)
+                                if ov: io_ou_over = ov
+                                if un: io_ou_under = un
+
+                if io_home:
+                    source = "odds-api.io"
+                    structure["match_winner"] = {
+                        "Home": {"odds-api.io": io_home},
+                        "Draw": {"odds-api.io": io_draw} if io_draw else {},
+                        "Away": {"odds-api.io": io_away} if io_away else {},
+                    }
+                    if io_ah_home or io_ah_away:
+                        structure["asian_handicap"] = {
+                            "Home": {"odds-api.io": {"price": io_ah_home, "point": -0.5}} if io_ah_home else {},
+                            "Away": {"odds-api.io": {"price": io_ah_away, "point": -0.5}} if io_ah_away else {},
+                            "main_line": "-0.5",
+                        }
+                    if io_ou_over or io_ou_under:
+                        structure["over_under"] = {
+                            "Over": {"odds-api.io": {"price": io_ou_over, "point": float(io_ou_line)}} if io_ou_over else {},
+                            "Under": {"odds-api.io": {"price": io_ou_under, "point": float(io_ou_line)}} if io_ou_under else {},
+                            "main_line": io_ou_line or "2.5",
+                        }
+                    all_notes.append(f"Source: odds-api.io (Bet365, Unibet)")
+        except Exception:
+            pass
+
+    # Try sporttery.cn as last resort
+    if not structure.get("match_winner"):
+        try:
+            sporttery_data = search_by_teams(home_name, away_name)
+            if not sporttery_data:
+                for wc in get_world_cup_matches():
+                    if home_name.lower() in wc["home_team"].lower() or home_name.lower() in wc["away_team"].lower():
+                        sporttery_data = wc
+                        break
+            if not sporttery_data:
+                sporttery_data = search_by_teams(home_name, away_name)
+
+            if sporttery_data and sporttery_data.get("odds", {}).get("h2h"):
+                h2h = sporttery_data["odds"]["h2h"]
+                if h2h.get("home"):
+                    source = "sporttery"
+                    structure["match_winner"] = {
+                        "Home": {"竞彩": h2h["home"]},
+                        "Draw": {"竞彩": h2h["draw"]} if h2h.get("draw") else {},
+                        "Away": {"竞彩": h2h["away"]} if h2h.get("away") else {},
+                    }
+                    ah = sporttery_data["odds"].get("asian_handicap")
+                    if ah and ah.get("home"):
+                        structure["asian_handicap"] = {
+                            "Home": {"竞彩": {"price": ah["home"], "point": float(ah.get("goal_line_value", 0))}},
+                            "Away": {"竞彩": {"price": ah["away"], "point": float(ah.get("goal_line_value", 0))}},
+                            "main_line": ah.get("goal_line", "0"),
+                        }
+                    all_notes.append(f"Source: 竞彩网 (Chinese government lottery odds)")
+        except Exception:
+            pass
+
+    if not structure.get("match_winner"):
         return {
             "agent": "odds_signals",
             "fixture": f"{home_name} vs {away_name}",
-            "finding": f"Failed to fetch odds: {e}",
+            "finding": "No pre-match odds available from any data source",
             "signal_strength": "none",
             "key_metrics": {},
-            "notes": [str(e)],
+            "notes": ["The Odds API, odds-api.io, and 竞彩网 all returned no data"],
         }
-
-    if not odds_data:
-        return {
-            "agent": "odds_signals",
-            "fixture": f"{home_name} vs {away_name}",
-            "finding": "No pre-match odds available yet",
-            "signal_strength": "none",
-            "key_metrics": {},
-            "notes": ["Odds typically appear 1-3 days before kickoff"],
-        }
-
-    structure = analyse_odds_structure(odds_data, home_name, away_name)
 
     # 1X2 analysis
     mw = structure["match_winner"]

@@ -28,7 +28,8 @@ Output:
 
 ```bash
 npx skills add canyonqian/football-betting-skill --all -g
-pip install requests soccerdata
+pip install requests soccerdata scrapling playwright
+playwright install chromium
 ```
 
 ## API Keys
@@ -37,13 +38,16 @@ pip install requests soccerdata
 |-----|------------|-----------|------|
 | `FOOTBALL_DATA_KEY` | [football-data.org](https://www.football-data.org/client/register) | 10 req/min | Fixtures, results, standings, H2H |
 | `ODDS_API_KEY` | [the-odds-api.com](https://the-odds-api.com/#get-access) | 500 credits/mo | 40+ bookmaker odds |
+| `ODDS_API_IO_KEY` | [api.odds-api.io](https://api.odds-api.io) | 100 req/hr | Deep markets (Bet365, Unibet); 265+ bookmakers on paid |
+| *(none)* | [竞彩网 sporttery.cn](https://webapi.sporttery.cn) | Unlimited | Chinese government lottery odds (1X2, handicap, correct score, HT-FT) |
 
 ```bash
 set FOOTBALL_DATA_KEY=your_key
 set ODDS_API_KEY=your_key
+set ODDS_API_IO_KEY=your_key
 ```
 
-No credit card required for either. `soccerdata` provides xG and per-game stats via web scraping (no API key needed).
+No credit card required. 竞彩网 needs no API key. `soccerdata` provides xG and per-game stats via web scraping (no API key needed).
 
 ## Data Sources
 
@@ -51,8 +55,15 @@ No credit card required for either. `soccerdata` provides xG and per-game stats 
 |--------|-----------|----------|
 | **football-data.org** | 10 req/min | Fixtures, standings, H2H, results |
 | **The Odds API** | 500 credits/mo | 1X2, spreads, totals from 40+ bookmakers |
+| **odds-api.io** | 100 req/hr | Deep markets: player props, corners, cards from Bet365/Unibet |
+| **竞彩网 sporttery.cn** | Unlimited | Chinese government lottery odds (1X2, handicap, correct score, HT-FT) |
+| **Flashscore (Playwright)** | Unlimited | Predicted/official lineups, formations, player positions, injuries |
 | **soccerdata** | Unlimited | xG (Understat), per-game stats (FBref) |
-| **Web search** | Unlimited | Injuries, lineups, coach news (Flashscore, Sofascore, Sports Mole) |
+| **Web search** | Unlimited | Coach info, team news (Sports Mole, Dongqiudi) |
+
+**Source fallback chain:** The Odds API → odds-api.io → 竞彩网 (each agent tries them in order for odds data).
+
+**Scraper fallback:** `get_team()` (restricted on football-data.org free tier) → Flashscore via Playwright (lineups, player data, injuries). See `scripts/api/scraper.py`.
 
 ## Requirements
 
@@ -60,9 +71,11 @@ No credit card required for either. `soccerdata` provides xG and per-game stats 
 |-----------|----------|---------|
 | Python 3.9+ | Yes | Runtime |
 | `requests` | Yes | HTTP client |
+| `playwright` + `scrapling` | Yes | Flashscore lineup/player scraping |
 | `soccerdata` | Recommended | Real xG and per-game stats |
 | `FOOTBALL_DATA_KEY` | Yes | Free from football-data.org |
 | `ODDS_API_KEY` | Yes | Free from the-odds-api.com |
+| `ODDS_API_IO_KEY` | Recommended | Free from api.odds-api.io |
 
 ## Troubleshooting
 

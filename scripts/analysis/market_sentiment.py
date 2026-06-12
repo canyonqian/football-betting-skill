@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api.football_data import get_match
 from api.odds_api import get_sport_key, get_odds, extract_h2h_odds
+from api.odds_api_io import find_event_id as io_find_event_id, get_odds as io_get_odds, extract_odds_summary
+from api.sporttery import search_by_teams, get_world_cup_matches
 from utils import print_json, implied_probability
 
 
@@ -91,9 +93,46 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     odds_data = get_odds(sport_key)
     h2h_odds = extract_h2h_odds(odds_data, home_name, away_name)
     search_queries = get_web_search_queries(home_name, away_name, season)
+    source_label = "The Odds API"
+
+    # Fallback to odds-api.io
+    if not h2h_odds:
+        try:
+            io_event_id = io_find_event_id(home_name, away_name)
+            if io_event_id:
+                io_data = io_get_odds(io_event_id, bookmakers="Bet365,Unibet")
+                io_summary = extract_odds_summary(io_data)
+                for book, markets in io_summary.items():
+                    if "ML" in markets:
+                        ml = markets["ML"][0]
+                        h = float(ml.get("home", 0)) or 0
+                        d = float(ml.get("draw", 0)) or 0
+                        a = float(ml.get("away", 0)) or 0
+                        if h or d or a:
+                            h2h_odds[book] = {"Home": h, "Draw": d, "Away": a}
+                if h2h_odds:
+                    source_label = "odds-api.io"
+        except Exception:
+            pass
+
+    # Final fallback to sporttery
+    if not h2h_odds:
+        try:
+            sp_data = search_by_teams(home_name, away_name)
+            if not sp_data:
+                for wc in get_world_cup_matches():
+                    if home_name.lower() in wc["home_team"].lower() or home_name.lower() in wc["away_team"].lower():
+                        sp_data = wc
+                        break
+            if sp_data and sp_data.get("odds", {}).get("h2h"):
+                h2h = sp_data["odds"]["h2h"]
+                if h2h.get("home"):
+                    h2h_odds = {"竞彩": {"Home": h2h["home"], "Draw": h2h["draw"] or 0, "Away": h2h["away"] or 0}}
+                    source_label = "竞彩网"
+        except Exception:
+            pass
     
     # Sharp vs retail comparison
-    public_bias = compare_sharp_vs_retail(h2h_odds)
     
     # Build sentiment interpretation
     notes = []
@@ -112,6 +151,8 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     if search_queries:
         notes.append(f"Web search suggested for crowd sentiment: see search_queries")
     
+    notes.insert(0, f"Odds source: {source_label}")
+
     # Determine overheating level
     if len(overheat_signals) >= 2:
         heat_level = "high"

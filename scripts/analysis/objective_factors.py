@@ -18,6 +18,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api.football_data import get_match, get_standings
+from api.scraper import FlashscoreScraper
 from utils import print_json
 
 
@@ -147,8 +148,33 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
     elif away_pts >= 10 and home_pts <= 3:
         notes.append(f"Strong recent-form gap favoring {away_name}")
 
-    notes.append("Squad and injury data: use web search (sportsmole.co.uk, dongqiudi.com) for team news.")
-    notes.append("Fatigue data not available via free API tier — web search for fixture congestion context.")
+    # Injury data via Flashscore scraper
+    injury_data = []
+    try:
+        scraper = FlashscoreScraper(headless=True, timeout=30000)
+        matches = scraper.search_match(home_name, away_name)
+        if matches:
+            match_url = None
+            for m in matches:
+                txt = m.get("text", "")
+                if home_name.lower() in txt.lower() and away_name.lower() in txt.lower():
+                    match_url = m["url"]
+                    break
+            if not match_url and matches:
+                match_url = matches[0]["url"]
+
+            if match_url:
+                ld = scraper.get_match_data(match_url)
+                injuries = ld.get("injuries", [])
+                for inj in injuries:
+                    injury_data.append(inj)
+                    notes.append(f"Flashscore — {inj['team']}: {inj['player']} ({inj['reason']})")
+    except Exception:
+        pass
+
+    if not injury_data:
+        notes.append("Squad and injury data: use web search (sportsmole.co.uk, dongqiudi.com) for team news.")
+        notes.append("Fatigue data not available via free API tier — web search for fixture congestion context.")
 
     search_queries = [
         f"{home_name} injuries suspensions {season}-{season + 1}",
@@ -195,6 +221,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
                 "league_position": away_pos,
                 "recent_form": away_form[:5] if away_form else None,
             },
+            "injuries": injury_data,
         },
         "notes": notes,
         "search_queries": search_queries,

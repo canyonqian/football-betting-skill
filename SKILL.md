@@ -48,7 +48,13 @@ Data sources:
   football-data.org (10 req/min) → fixtures, standings, H2H, results
   soccerdata (no limits)         → xG, per-game stats, player data
   The Odds API (500 credits/mo)  → odds from 40+ bookmakers
+  odds-api.io (100 req/hr free)  → deep markets from Bet365/Unibet (265+ bookmakers on paid)
+  竞彩网 sporttery.cn (unlimited) → Chinese government lottery odds (1X2, handicap, correct score, HT-FT)
   Web search                     → injuries, lineups, coach, team news
+
+Source fallback chain: The Odds API → odds-api.io → 竞彩网. When a source has no data
+for a fixture (e.g. World Cup not yet on The Odds API), the agent automatically tries the
+next source. This means World Cup matches always have odds coverage.
 ```
 
 ## Execution Protocol
@@ -69,18 +75,31 @@ if (-not $env:ODDS_API_KEY) { Write-Output "MISSING: ODDS_API_KEY" }
 ```
 Register: https://the-odds-api.com/#get-access (free, 500 credits/month)
 
-**3. soccerdata** (xG + detailed stats, optional):
+**3. ODDS_API_IO_KEY** (deep odds data):
+```bash
+if (-not $env:ODDS_API_IO_KEY) { Write-Output "MISSING: ODDS_API_IO_KEY" }
+```
+Register: https://api.odds-api.io (free, 100 req/hr, 2 bookmakers)
+
+**4. sporttery.cn** (竞彩网, no key needed):
+```bash
+python -c "from scripts.api.sporttery import get_world_cup_matches; m=get_world_cup_matches(); print(f'竞彩: OK — {len(m)} WC matches')"
+```
+
+**5. soccerdata** (xG + detailed stats, optional):
 ```bash
 pip install soccerdata 2>$null; python -c "import soccerdata; print('soccerdata: OK')"
 ```
 If not installed, agents G and H will have reduced capability.
 
-If either API key is missing, **STOP and tell the user exactly which key is missing and where to register it.**
+If any API key is missing, **STOP and tell the user exactly which key is missing and where to register it.**
 
 ```bash
-# Quick verify
-python -c "from scripts.api.football_data import get_competitions; c=get_competitions(); print(f'FOOTBALL_DATA_KEY: OK — {len(c)} competitions')"
-python -c "from scripts.api.odds_api import get_sports; s=get_sports(); print(f'ODDS_API_KEY: OK — {len(s)} sports')"
+# Quick verify all sources
+python -c "from scripts.api.football_data import get_competitions; c=get_competitions(); print(f'football-data: OK — {len(c)} competitions')"
+python -c "from scripts.api.odds_api import get_sports; s=get_sports(); print(f'Odds API: OK — {len(s)} sports')"
+python -c "from scripts.api.odds_api_io import get_leagues; l=get_leagues(); print(f'odds-api.io: OK — {len(l)} leagues')"
+python -c "from scripts.api.sporttery import get_world_cup_matches; m=get_world_cup_matches(); print(f'竞彩: OK — {len(m)} WC matches')"
 ```
 
 ### Step 1: Parse the user request
@@ -202,12 +221,15 @@ Or apply the cross-validation logic from `aggregator.py` directly in your reason
 
 ## API Setup
 
-Two free API keys required:
+Three free API keys required:
 ```bash
 set FOOTBALL_DATA_KEY=your_key_here   # https://www.football-data.org/client/register
 set ODDS_API_KEY=your_key_here        # https://the-odds-api.com/#get-access
+set ODDS_API_IO_KEY=your_key_here     # https://api.odds-api.io (register for free key)
 ```
 Install deps: `pip install requests soccerdata`
+
+**Note:** 竞彩网 (sporttery.cn) requires no API key. It uses a public, unrestricted endpoint.
 
 **If rate limit is hit:** Report the error clearly. User can upgrade their plan for more requests.
 
