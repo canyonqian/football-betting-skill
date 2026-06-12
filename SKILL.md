@@ -1,6 +1,6 @@
 ---
 name: football-betting-analysis
-description: Use when the user wants to analyse football matches for betting purposes — covers 1X2, Asian handicap, and Over/Under markets. Use when the user asks for 比赛分析, 足彩分析, 盘口分析, 赔率分析, or wants to understand bookmaker pricing logic. Launches 8 parallel sub-agents for multi-dimensional analysis, then cross-validates to find value opportunities.
+description: Use when the user wants to predict, analyze, or evaluate football/soccer matches — including match predictions, betting analysis, odds interpretation, handicap analysis, over/under, correct score, 比赛预测, 足球分析, 胜平负, 让球盘, 大小球, 比分预测, 盘口, 赔率, 足彩, 竞彩, 下注建议. Launches 8 parallel sub-agents with 3-stage adversarial review to produce concrete probability predictions for 1X2, Asian handicap, Over/Under, and Correct Score.
 ---
 
 # Football Betting Analysis Skill
@@ -15,12 +15,17 @@ Reverse-engineer bookmaker pricing logic through 8 parallel analysis dimensions.
 
 ## When to Use
 
-- User asks to analyse a football match for betting
-- User wants 1X2 / Asian handicap / over-under analysis
-- User asks for match predictions with odds context
-- User wants to understand bookmaker intent from odds movement
+**Trigger immediately when user mentions ANY of:**
+- Match prediction / analysis / evaluation for football/soccer
+- Betting / odds / handicap / spread / over-under questions
+- Score prediction / result forecast
+- 比赛预测 / 分析比赛 / 足球分析 / 比分预测
+- 胜平负 / 让球盘 / 大小球 / 盘口 / 赔率
+- 足彩 / 竞彩 / 下注 / 投注建议
+- "这场比赛怎么看" / "帮我看看这场" / "今晚的比赛"
+- Any question involving odds data, bookmaker analysis, or betting value
 
-**Required:** User must provide fixture ID, league ID, and season, OR enough context to look them up (team names + league name).
+**Required:** User must provide fixture ID, league ID, and season, OR team names + league name (you look up IDs).
 
 ## Architecture
 
