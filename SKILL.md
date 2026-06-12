@@ -9,13 +9,15 @@ description: Use when the user wants to analyse football matches for betting pur
 
 Reverse-engineer bookmaker pricing logic through 8 parallel analysis dimensions. Find the gap between what odds say and what fundamentals/statistics/history suggest — that gap is where betting value lives.
 
+**Language rule:** All internal reasoning is in English. Output to the user in their language.
+
 **Core principle:** Not predicting results. Finding mispricing.
 
 ## When to Use
 
 - User asks to analyse a football match for betting
-- User wants 欧赔/亚盘/大小球 analysis
-- User asks "这场比赛怎么看" for betting purposes
+- User wants 1X2 / Asian handicap / over-under analysis
+- User asks for match predictions with odds context
 - User wants to understand bookmaker intent from odds movement
 
 **Required:** User must provide fixture ID, league ID, and season, OR enough context to look them up (team names + league name).
@@ -23,18 +25,18 @@ Reverse-engineer bookmaker pricing logic through 8 parallel analysis dimensions.
 ## Architecture
 
 ```
-User request: "分析 fixture_id=X, league_id=Y, season=Z"
+User request: "Analyze fixture_id=X, league_id=Y, season=Z"
   → Master agent (you): spawn 8 parallel sub-agents
-    ├── Sub-agent A: fundamentals.py (基本面 vs 盘口偏差)
-    ├── Sub-agent B: odds_signals.py (盘口信号解读)
-    ├── Sub-agent C: historical_backtest.py (历史同赔回测)
-    ├── Sub-agent D: bookmaker_divergence.py (庄家分歧度)
-    ├── Sub-agent E: market_sentiment.py (市场情绪)
-    ├── Sub-agent F: objective_factors.py (客观因素)
-    ├── Sub-agent G: tactical_matchup.py (战术风格匹配)
-    └── Sub-agent H: player_coach_xg.py (球员教练+xG)
+    ├── A: fundamentals.py      (form/H2H/standings vs odds gap)
+    ├── B: odds_signals.py       (odds movement & bookmaker intent)
+    ├── C: historical_backtest.py(odds pattern backtesting)
+    ├── D: bookmaker_divergence.py(multi-bookmaker dispersion)
+    ├── E: market_sentiment.py   (public bias & contrarian signals)
+    ├── F: objective_factors.py  (injuries, fatigue, squad depth)
+    ├── G: tactical_matchup.py   (formations, style clash, goal timing)
+    └── H: player_coach_xg.py    (player impact, coach profile, xG proxy)
   → Wait for ALL 8 to complete
-  → Feed results to aggregator.py for cross-validation
+  → Feed results to aggregator for cross-validation
   → Present final report to user
 ```
 
@@ -116,45 +118,16 @@ Or apply the cross-validation logic from `aggregator.py` directly in your reason
 
 ### Step 4: Present the final report
 
-Format the output clearly for the user:
+**Output language must match the user's language.** If the user asked in Chinese, respond in Chinese. If in English, respond in English. The report structure is:
 
-1. **摘要**: One-line summary of the analysis
-2. **矛盾与一致**: Which dimensions conflict, which agree
-3. **各维度详情**: Brief summary of each sub-agent's key findings
-4. **投注建议**: Per bet type: Recommend / Watch / Avoid with reasons
-5. **风险提示**: Key risk factors
-
-## API Setup
-
-Before analysis, ensure:
-```bash
-set RAPIDAPI_KEY=your_key_here
-```
-
-Get an API key from: https://rapidapi.com/api-sports/api/api-football
-Sign up for the free tier (100 requests/day).
-
-**If rate limit is hit:** Report the error clearly. User can upgrade their plan for more requests.
-
-## Looking Up IDs
-
-When user provides team names instead of IDs:
-
-```bash
-# Search for league ID
-python -c "from scripts.api.api_football import get_leagues; from scripts.utils import print_json; print_json(get_leagues(search='World Cup'))"
-
-# Search for team ID  
-python -c "from scripts.api.api_football import get_teams; from scripts.utils import print_json; print_json(get_teams(name='Brazil'))"
-
-# Find fixtures
-python -c "from scripts.api.api_football import get_fixtures; from scripts.utils import print_json; print_json(get_fixtures(league_id=X, season=2026, team_id=Y))"
-```
-
-## Key Analysis Concepts
+1. **Summary**: One-line overall assessment
+2. **Conflicts & Consensus**: Which dimensions disagree (conflicts) and which agree (consensus) — conflicts are the most interesting findings
+3. **Agent-by-agent findings**: Brief summary of each sub-agent's key output
+4. **Betting recommendations**: Per bet type — Recommend / Watch / Avoid with reasoning
+5. **Risk warnings**: Key risk factors the user should know
 
 ### Reading Odds Movement
-- **初盘→即时盘 direction**: If odds shorten on a side, money is flowing that way
+- **Opening → current direction**: If odds shorten on a side, money is flowing that way
 - **Sharp move late**: Big shift in last hours before kickoff = strongest signal
 - **Opposite movement**: If odds move against popular opinion, bookmaker is likely right
 
@@ -181,35 +154,34 @@ python -c "from scripts.api.api_football import get_fixtures; from scripts.utils
 - Sharp bookmakers (Pinnacle) disagree with retail (Bet365) = follow the sharps
 - Market overheating on favorite + fundamentals disagree = potential value on underdog
 
-## Output Format
+## API Setup
 
-Final report follows this structure:
-```
-📊 比赛: [Home] vs [Away] | [Date]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🔍 八维分析摘要:
-  [fundamentals]: [finding] (信号强度: strong/medium/weak)
-  [odds_signals]: [finding] (信号强度: ...)
-  ...
-
-⚠️ 矛盾点 (Conflicts):
-  - [conflict description] → [interpretation]
-
-✅ 一致点 (Consensus):
-  - [agreement description]
-
-🎯 投注建议:
-  胜平负:     Recommend/Watch/Avoid — [reasoning]
-  让球盘:     Recommend/Watch/Avoid — [reasoning]
-  大小球:     Recommend/Watch/Avoid — [reasoning]
-
-📋 风险提示:
-  - [risk factor 1]
-  - [risk factor 2]
+Before analysis, ensure:
+```bash
+set RAPIDAPI_KEY=your_key_here
 ```
 
-## Quick Reference: Common World Cup IDs
+Get an API key from: https://rapidapi.com/api-sports/api/api-football
+Sign up for the free tier (100 requests/day). No credit card required.
+
+**If rate limit is hit:** Report the error clearly. User can upgrade their plan for more requests.
+
+## Looking Up IDs
+
+When user provides team names instead of IDs:
+
+```bash
+# Search for league ID
+python -c "from scripts.api.api_football import get_leagues; from scripts.utils import print_json; print_json(get_leagues(search='World Cup'))"
+
+# Search for team ID  
+python -c "from scripts.api.api_football import get_teams; from scripts.utils import print_json; print_json(get_teams(name='Brazil'))"
+
+# Find fixtures
+python -c "from scripts.api.api_football import get_fixtures; from scripts.utils import print_json; print_json(get_fixtures(league_id=X, season=2026, team_id=Y))"
+```
+
+## Quick Reference: Common League IDs
 
 | Competition | League ID | Common Seasons |
 |------------|-----------|----------------|
@@ -221,5 +193,5 @@ Final report follows this structure:
 | Serie A | 135 | 2022, 2023, 2024, 2025 |
 | Ligue 1 | 61 | 2022, 2023, 2024, 2025 |
 | Champions League | 2 | 2022, 2023, 2024, 2025 |
-| CSL (中超) | 169 | 2022, 2023, 2024, 2025 |
+| CSL | 169 | 2022, 2023, 2024, 2025 |
 | J-League | 98 | 2022, 2023, 2024, 2025 |
