@@ -12,13 +12,13 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.api_football import (
-    get_fixture_by_id,
+from api.football_data import (
     get_team_statistics,
-    get_fixtures,
     get_teams,
+    get_match,
+    get_standings,
+    get_head2head,
 )
-from api.football_data import get_match, get_standings, get_head2head
 from utils import print_json
 
 try:
@@ -383,7 +383,7 @@ def run(match_id: int, competition_id: str, season: int) -> dict:
         home_id = away_id = None
 
     if not home_id or not away_id:
-        return {"agent": "tactical_matchup", "match_id": match_id, "error": "Could not resolve team IDs in API-Football"}
+        return {"agent": "tactical_matchup", "match_id": match_id, "error": "Could not resolve team IDs in football-data.org"}
 
     # Team statistics (formations + goal timing)
     home_stats = get_team_statistics(home_id, league_id, season).get("response", {})
