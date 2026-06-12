@@ -130,13 +130,21 @@ Or apply the cross-validation logic from `aggregator.py` directly in your reason
 
 ### Step 4: Present the final report
 
-**Output language must match the user's language.** If the user asked in Chinese, respond in Chinese. If in English, respond in English. The report structure is:
+**Output language must match the user's language.** The report MUST include:
 
-1. **Summary**: One-line overall assessment
-2. **Conflicts & Consensus**: Which dimensions disagree (conflicts) and which agree (consensus) — conflicts are the most interesting findings
-3. **Agent-by-agent findings**: Brief summary of each sub-agent's key output
-4. **Betting recommendations**: Per bet type — Recommend / Watch / Avoid with reasoning
-5. **Risk warnings**: Key risk factors the user should know
+1. **Predictions** — the most important section. Concrete probability estimates synthesized from all agents:
+   - 1X2: Home X% | Draw Y% | Away Z% → Prediction: [outcome] at [probability]% confidence
+   - Asian Handicap: line +/-X.X → direction [Home/Away] cover probability Y%
+   - Over/Under X.X: Over Y% → direction [Over/Under]
+   - List which data sources contributed to each prediction
+
+2. **Market Phase** — how far from kickoff, what phase, what action to take
+3. **Summary** — one-line overall assessment
+4. **Conflicts & Consensus** — which dimensions disagree (conflicts) and agree (consensus)
+5. **Agent findings** — each agent's output with adversarial adjustment (strength→adjusted)
+6. **Recommendations** — per bet type: Recommend / Watch / Avoid with reasoning
+7. **Data Sufficiency** — which agents are reliable, what to trust/ignore
+8. **Adversarial flags** — which agents were downgraded and why
 
 ### Reading Odds Movement
 - **Opening → current direction**: If odds shorten on a side, money is flowing that way

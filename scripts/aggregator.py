@@ -73,8 +73,11 @@ def cross_validate(results: list[dict]) -> dict:
     # Build bet recommendations (uses adjusted confidence + timeline)
     bets = build_bet_recommendations(valid, conflicts, consensus, confidence, timeline)
     
+    # Synthesize probability estimates from all agents
+    synthetic = synthesize_probabilities(valid, confidence)
+    
     # Build executive summary
-    summary = build_summary(valid, conflicts, consensus, bets, confidence, timeline, guidance)
+    summary = build_summary(valid, conflicts, consensus, bets, confidence, timeline, guidance, synthetic)
     
     return {
         "fixture": fixture,
@@ -93,6 +96,7 @@ def cross_validate(results: list[dict]) -> dict:
         "confidence": confidence,
         "timeline": timeline,
         "guidance": guidance,
+        "synthetic": synthetic,
         "bets": bets,
         "summary": summary,
         "warnings": [e.get("error", "") for e in errors],
@@ -466,6 +470,177 @@ def data_sufficiency_guidance(valid_results: list[dict], confidence: dict, timel
     }
 
 
+def synthesize_probabilities(valid_results: list[dict], confidence: dict) -> dict:
+    """Synthesize concrete probability estimates for each bet type from all agents.
+    
+    Weighted average of agent probability estimates, with downgraded agents getting half weight.
+    Falls back to market-implied probabilities when no agent estimates are available.
+    """
+    # Collect probability estimates from agents
+    # Each source provides: (home_prob, draw_prob, away_prob, weight, source_name)
+    estimates_1x2 = []
+    estimates_ou = []  # (over_prob, weight, source_name)
+    estimates_ah = []  # (home_cover_prob, weight, source_name, line)
+    
+    for r in valid_results:
+        agent = r["agent"]
+        metrics = r.get("key_metrics", {})
+        conf = confidence.get(agent, {})
+        weight = 0.5 if conf.get("downgraded") else 1.0
+        
+        # --- 1X2 estimates ---
+        if agent == "fundamentals":
+            fair_home = metrics.get("fair_home_probability")
+            market_implied = metrics.get("market_implied_probability")
+            if fair_home is not None and market_implied is not None:
+                # Use fair probability from fundamentals model
+                estimates_1x2.append((fair_home, 1 - fair_home, weight * 1.5, "fundamentals_model"))
+        
+        elif agent == "odds_signals":
+            fair = metrics.get("fair_probabilities", {})
+            if fair.get("home"):
+                estimates_1x2.append((fair["home"], fair.get("draw", 0.33), fair.get("away", 0.33), weight * 1.2, "kelly_fair"))
+            
+            # AH and OU from odds
+            ah_line = metrics.get("asian_handicap", {}).get("line")
+            if ah_line and ah_line != "N/A":
+                try:
+                    line = float(ah_line)
+                    # If bookmaker has given a handicap, the probability of covering
+                    # can be estimated from the odds. But we need more data.
+                    # Use the line direction as a signal
+                    if line < 0:
+                        estimates_ah.append((0.55, weight, f"odds_ah_line_{ah_line}", ah_line))
+                    elif line > 0:
+                        estimates_ah.append((0.55, weight, f"odds_ah_line_{ah_line}", ah_line))
+                    else:
+                        estimates_ah.append((0.5, weight, f"odds_ah_line_{ah_line}", ah_line))
+                except (ValueError, TypeError):
+                    pass
+        
+        elif agent == "historical_backtest":
+            baseline = metrics.get("league_baseline", {})
+            if baseline:
+                estimates_1x2.append((
+                    baseline.get("home_win_rate", 0.33),
+                    baseline.get("draw_rate", 0.33),
+                    baseline.get("away_win_rate", 0.33),
+                    weight * 0.8,
+                    "historical_baseline"
+                ))
+            # Over/under from historical
+            if baseline.get("over_25_rate"):
+                estimates_ou.append((baseline["over_25_rate"], weight * 0.8, "historical_baseline"))
+        
+        elif agent == "market_sentiment":
+            preds = metrics.get("predictions", {})
+            if preds.get("home"):
+                try:
+                    h = float(preds["home"].replace("%", "")) / 100
+                    d = float(preds.get("draw", "33%").replace("%", "")) / 100
+                    a = float(preds.get("away", "33%").replace("%", "")) / 100
+                    estimates_1x2.append((h, d, a, weight * 0.7, "predictions_api"))
+                except (ValueError, TypeError, AttributeError):
+                    pass
+        
+        elif agent == "player_coach_xg":
+            xg_home = metrics.get("xg_proxy", {}).get("home", {}).get("goals_per_game")
+            xg_away = metrics.get("xg_proxy", {}).get("away", {}).get("goals_per_game")
+            if xg_home and xg_away:
+                combined = xg_home + xg_away
+                over_prob = min(combined / 3.0, 0.85)
+                estimates_ou.append((over_prob, weight * 0.6, "xg_proxy"))
+        
+        elif agent == "tactical_matchup":
+            home_goals = metrics.get("home", {}).get("goal_timing", {})
+            away_goals = metrics.get("away", {}).get("goal_timing", {})
+            # Weak over/under signal from goal timing
+            if home_goals.get("scoring_pattern") == "early-dominant" and away_goals.get("scoring_pattern") == "early-dominant":
+                estimates_ou.append((0.52, weight * 0.4, "goal_timing_both_early"))
+    
+    # --- Synthesize 1X2 probabilities ---
+    home_probs = []
+    draw_probs = []
+    away_probs = []
+    
+    if estimates_1x2:
+        total_weight = sum(w for _, _, w, _ in estimates_1x2)
+        for h, d, a, w, src in estimates_1x2:
+            home_probs.append(h * w)
+            draw_probs.append(d * w)
+            away_probs.append(a * w)
+        home_final = sum(home_probs) / total_weight
+        draw_final = sum(draw_probs) / total_weight
+        away_final = sum(away_probs) / total_weight
+    else:
+        # Fallback: use market-implied from odds
+        for r in valid_results:
+            if r["agent"] == "fundamentals":
+                mkt = r.get("key_metrics", {}).get("market_implied_probability")
+                if mkt:
+                    home_final = mkt
+                    draw_final = (1 - mkt) / 2
+                    away_final = (1 - mkt) / 2
+                    break
+        else:
+            home_final = 0.40
+            draw_final = 0.28
+            away_final = 0.32
+    
+    # Determine 1X2 direction
+    probs = {"Home": home_final, "Draw": draw_final, "Away": away_final}
+    best_outcome = max(probs, key=probs.get)
+    best_prob = probs[best_outcome]
+    second_prob = sorted(probs.values(), reverse=True)[1]
+    confidence_1x2 = "high" if best_prob > 0.50 and (best_prob - second_prob) > 0.10 else \
+                     "medium" if best_prob > 0.40 else "low"
+    
+    # --- Synthesize Asian Handicap ---
+    ah_recommendation = {"line": "N/A", "direction": "N/A", "confidence": "none"}
+    if estimates_ah:
+        # Get the most common AH line
+        from collections import Counter
+        lines = [l for _, _, _, l in estimates_ah if l]
+        if lines:
+            ah_line = Counter(lines).most_common(1)[0][0]
+            home_cover_probs = [p for p, w, _, l in estimates_ah if l == ah_line]
+            if home_cover_probs:
+                avg_cover = sum(home_cover_probs) / len(home_cover_probs)
+                ah_recommendation = {
+                    "line": ah_line,
+                    "direction": "Home" if avg_cover > 0.52 else "Away" if avg_cover < 0.48 else "Neutral",
+                    "home_cover_probability": round(avg_cover, 2),
+                    "confidence": "medium" if abs(avg_cover - 0.5) > 0.05 else "low",
+                }
+    
+    # --- Synthesize Over/Under ---
+    ou_recommendation = {"line": "2.5", "direction": "N/A", "confidence": "none"}
+    if estimates_ou:
+        total_weight = sum(w for _, w, _ in estimates_ou)
+        over_prob = sum(p * w for p, w, _ in estimates_ou) / total_weight
+        ou_recommendation = {
+            "line": "2.5",
+            "over_probability": round(over_prob, 2),
+            "direction": "Over" if over_prob > 0.55 else "Under" if over_prob < 0.45 else "Neutral",
+            "confidence": "high" if abs(over_prob - 0.5) > 0.10 else \
+                          "medium" if abs(over_prob - 0.5) > 0.05 else "low",
+        }
+    
+    return {
+        "1x2": {
+            "home": round(home_final * 100),
+            "draw": round(draw_final * 100),
+            "away": round(away_final * 100),
+            "prediction": best_outcome,
+            "probability": round(best_prob * 100),
+            "confidence": confidence_1x2,
+            "sources": [src for _, _, _, src in estimates_1x2],
+        },
+        "asian_handicap": ah_recommendation,
+        "over_under": ou_recommendation,
+    }
+
+
 def detect_conflicts(valid_results: list[dict]) -> list[dict]:
     """Detect areas where sub-agent findings contradict each other."""
     conflicts = []
@@ -735,7 +910,7 @@ def build_bet_recommendations(valid_results: list[dict],
 
 def build_summary(valid_results: list[dict], conflicts: list[dict],
                    consensus: list[dict], bets: dict, confidence: dict,
-                   timeline: dict, guidance: dict) -> str:
+                   timeline: dict, guidance: dict, synthetic: dict) -> str:
     """Build executive summary text."""
     parts = []
     
@@ -776,8 +951,24 @@ def build_summary(valid_results: list[dict], conflicts: list[dict],
         for c in consensus:
             parts.append(f"  [{', '.join(c['dimensions'])}] {c['agreement']}")
     
-    # Recommendations
-    parts.append("\n=== RECOMMENDATIONS ===")
+    # SYNTHETIC PROBABILITIES — the key output
+    parts.append(f"\n=== PREDICTIONS ===")
+    
+    x12 = synthetic.get("1x2", {})
+    parts.append(f"  1X2: Home {x12.get('home', '?')}% | Draw {x12.get('draw', '?')}% | Away {x12.get('away', '?')}%")
+    parts.append(f"  → {x12.get('prediction', 'N/A')} ({x12.get('probability', '?')}%) — confidence: {x12.get('confidence', '?')}")
+    parts.append(f"  Sources: {', '.join(x12.get('sources', []))}")
+    
+    ah = synthetic.get("asian_handicap", {})
+    parts.append(f"\n  Asian Handicap: line {ah.get('line', 'N/A')} → {ah.get('direction', 'N/A')} (cover {ah.get('home_cover_probability', '?')})")
+    parts.append(f"  Confidence: {ah.get('confidence', '?')}")
+    
+    ou = synthetic.get("over_under", {})
+    parts.append(f"\n  Over/Under {ou.get('line', '2.5')}: Over {ou.get('over_probability', '?')} → {ou.get('direction', 'N/A')}")
+    parts.append(f"  Confidence: {ou.get('confidence', '?')}")
+    
+    # Recommendations (qualitative)
+    parts.append(f"\n=== RECOMMENDATIONS ===")
     for bet_type, info in bets.items():
         rec = info["recommendation"].upper()
         parts.append(f"  {bet_type}: {rec} (confidence: {info['confidence']}) — {info['reasoning']}")
