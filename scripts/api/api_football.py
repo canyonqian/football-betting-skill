@@ -25,29 +25,67 @@ def _headers() -> dict[str, str]:
     return {"x-apisports-key": key}
 
 
-def _get(endpoint: str, params: Optional[dict[str, Any]] = None) -> dict:
-    """Make a GET request to API-Football v3.
-
-    Returns the 'response' list from the API. Raises RateLimitError on 429.  
+def _get(endpoint: str, params: Optional[dict[str, Any]] = None, retries: int = 2) -> dict:
+    """Make a GET request to API-Football v3 with per-minute rate limit handling.
+    
+    Free tier: 10 req/min + 100 req/day. If per-minute limit is near, sleep.
+    On 429: retry after delay. On repeated 429: raise RateLimitError.
     """
     url = f"{BASE_URL}/{endpoint}"
-    resp = requests.get(url, headers=_headers(), params=params or {})
     
-    if resp.status_code == 429:
-        raise RateLimitError("API rate limit reached. Upgrade plan for more requests.")
+    for attempt in range(retries + 1):
+        resp = requests.get(url, headers=_headers(), params=params or {}, timeout=30)
+        
+        if resp.status_code == 429:
+            if attempt < retries:
+                # Per-minute limit — wait and retry
+                delay = 15 * (attempt + 1)
+                time.sleep(delay)
+                continue
+            raise RateLimitError(
+                "API rate limit reached after retries. "
+                "Wait 1 minute or upgrade plan for more requests."
+            )
+        
+        if resp.status_code != 200:
+            body = resp.text[:300]
+            raise RuntimeError(f"API returned {resp.status_code}: {body}")
+        
+        data = resp.json()
+        
+        # Check for rate limit in response body (API returns 200 with error body)
+        errors = data.get("errors")
+        if errors:
+            rate_limited = False
+            if isinstance(errors, dict) and "rateLimit" in str(errors):
+                rate_limited = True
+            elif isinstance(errors, list):
+                rate_limited = any("rateLimit" in str(e) or "rate limit" in str(e).lower() for e in errors)
+            elif isinstance(errors, str):
+                rate_limited = "rateLimit" in errors or "rate limit" in errors.lower()
+            
+            if rate_limited:
+                if attempt < retries:
+                    delay = 15 * (attempt + 1)
+                    time.sleep(delay)
+                    continue
+                raise RateLimitError(
+                    "API rate limit reached after retries. "
+                    "Wait 1 minute or upgrade plan for more requests."
+                )
+            
+            # Genuine error, not rate limit
+            msg = str(errors)
+            raise RuntimeError(f"API errors: {msg}")
+        
+        # Check per-minute remaining — pre-sleep if running low
+        remaining = resp.headers.get("x-ratelimit-remaining")
+        if remaining and remaining.isdigit() and int(remaining) <= 2 and attempt == 0:
+            time.sleep(10)  # Wait for rate limit window to reset
+        
+        return data
     
-    if resp.status_code != 200:
-        body = resp.text[:300]
-        raise RuntimeError(f"API returned {resp.status_code}: {body}")
-    
-    data = resp.json()
-    if data.get("errors"):
-        errors = data["errors"]
-        # Some errors come as dict, some as list
-        msg = str(errors)
-        raise RuntimeError(f"API errors: {msg}")
-    
-    return data
+    raise RateLimitError("API rate limit exhausted.")  # Should not reach here
 
 
 def get_fixtures(league_id: int, season: int, 

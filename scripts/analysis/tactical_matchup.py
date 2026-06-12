@@ -76,8 +76,13 @@ def analyse_style(fixtures: list[dict], team_id: int, team_name: str) -> dict:
                     val = stat_entry.get("value")
                     if val is None:
                         continue
+                    if not isinstance(val, (int, float, str)):
+                        continue
                     try:
-                        v = float(val.replace("%", "")) if isinstance(val, str) and "%" in val else float(val)
+                        if isinstance(val, str) and "%" in val:
+                            v = float(val.replace("%", ""))
+                        else:
+                            v = float(val)
                     except (ValueError, TypeError):
                         continue
                     
@@ -167,9 +172,17 @@ def analyse_goal_timing(team_stats: dict) -> dict:
     def find_peak(intervals: dict) -> str:
         if not intervals:
             return "unknown"
-        peak_key = max(intervals, key=lambda k: 
-            float(intervals[k].get("percentage", "0%").replace("%", "")) 
-            if isinstance(intervals[k], dict) else 0)
+        def extract_pct(k: str) -> float:
+            if not isinstance(intervals[k], dict):
+                return 0
+            pct = intervals[k].get("percentage")
+            if pct is None or not isinstance(pct, str):
+                return 0
+            try:
+                return float(pct.replace("%", ""))
+            except (ValueError, TypeError):
+                return 0
+        peak_key = max(intervals, key=extract_pct)
         return peak_key
     
     peak_scoring = find_peak(for_intervals)
