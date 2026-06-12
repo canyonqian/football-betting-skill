@@ -76,8 +76,11 @@ def cross_validate(results: list[dict]) -> dict:
     # Synthesize probability estimates from all agents
     synthetic = synthesize_probabilities(valid, confidence)
     
+    # Second adversarial review: challenge the COMBINED prediction itself
+    pred_review = adversarial_review_prediction(synthetic, valid, confidence, conflicts, timeline)
+    
     # Build executive summary
-    summary = build_summary(valid, conflicts, consensus, bets, confidence, timeline, guidance, synthetic)
+    summary = build_summary(valid, conflicts, consensus, bets, confidence, timeline, guidance, synthetic, pred_review)
     
     return {
         "fixture": fixture,
@@ -97,6 +100,7 @@ def cross_validate(results: list[dict]) -> dict:
         "timeline": timeline,
         "guidance": guidance,
         "synthetic": synthetic,
+        "prediction_review": pred_review,
         "bets": bets,
         "summary": summary,
         "warnings": [e.get("error", "") for e in errors],
@@ -720,6 +724,124 @@ def synthesize_correct_score(valid_results: list[dict], confidence: dict) -> dic
     }
 
 
+def adversarial_review_prediction(synthetic: dict, valid_results: list[dict],
+                                   confidence: dict, conflicts: list[dict],
+                                   timeline: dict) -> dict:
+    """Challenge the COMBINED prediction result itself — not each agent, but the final numbers."""
+    challenges = []
+    adjustments = {}
+    
+    x12 = synthetic.get("1x2", {})
+    ah = synthetic.get("asian_handicap", {})
+    ou = synthetic.get("over_under", {})
+    cs = synthetic.get("correct_score", {})
+    
+    actual_contributors = len([r for r in valid_results if "error" not in r])
+    
+    x12_home = x12.get("home", 50)
+    x12_draw = x12.get("draw", 25)
+    x12_away = x12.get("away", 25)
+    x12_conf = x12.get("confidence", "low")
+    
+    # 1. Is the gap between best and second big enough?
+    probs_sorted = sorted([x12_home, x12_draw, x12_away], reverse=True)
+    gap_top = probs_sorted[0] - probs_sorted[1]
+    if gap_top < 8:
+        challenges.append(f"1X2 too close: best ({probs_sorted[0]}%) only {gap_top}pp ahead. Coin flip.")
+        if x12_conf != "low":
+            adjustments["1x2_confidence"] = "low"
+    
+    # 2. Does prediction contradict fundamentals gap?
+    for r in valid_results:
+        if r["agent"] == "fundamentals":
+            gap = r.get("key_metrics", {}).get("gap")
+            if gap is not None and abs(gap) > 0.10:
+                if (gap > 0 and x12.get("prediction") != "Home") or (gap < 0 and x12.get("prediction") == "Home"):
+                    challenges.append(f"1X2 contradicts fundamentals (gap={gap:.3f}). Model vs market disagreement.")
+    
+    # 3. Are all prediction sources from the same category?
+    sources = x12.get("sources", [])
+    unique_sources = len(set(sources))
+    if unique_sources <= 1:
+        challenges.append(f"1X2 informed by only {unique_sources} source(s). Narrow — missing cross-validation.")
+    
+    # 4. Core data missing?
+    core = {"fundamentals", "odds_signals", "historical_backtest"}
+    present = set(r["agent"] for r in valid_results if "error" not in r)
+    missing_core = core - present
+    if missing_core:
+        challenges.append(f"1X2 missing core data: {', '.join(missing_core)}. Lacks foundational dimensions.")
+    
+    # 5. AH vs 1X2 — do they agree?
+    if ah.get("direction") != "N/A" and x12.get("prediction"):
+        if (ah["direction"] == "Home" and x12["prediction"] != "Home") or \
+           (ah["direction"] == "Away" and x12["prediction"] != "Away"):
+            challenges.append(f"AH says {ah['direction']} but 1X2 says {x12['prediction']}. Internal contradiction.")
+    
+    # 6. AH cover probability — noise?
+    ah_cover = ah.get("home_cover_probability")
+    if ah_cover and 0.48 <= ah_cover <= 0.52:
+        challenges.append(f"AH cover ({ah_cover}) within noise range (±2pp). No directional signal.")
+    
+    # 7. O/U vs correct score model
+    ou_dir = ou.get("direction", "N/A")
+    if cs.get("available") and ou_dir != "N/A":
+        top = cs.get("top_scores", [])
+        if top:
+            cs_goals = sum(s["home"] + s["away"] for s in top) / len(top)
+            if (ou_dir == "Over" and cs_goals < 2.5) or (ou_dir == "Under" and cs_goals >= 2.5):
+                challenges.append(f"O/U {ou_dir} vs score model {cs_goals:.1f} goals. Model contradiction.")
+    
+    # 8. xG downgrade contaminates O/U
+    xg_down = confidence.get("player_coach_xg", {}).get("downgraded", False)
+    if xg_down and ou.get("confidence") != "low":
+        challenges.append("O/U influenced by downgraded xG agent. Confidence should be lower.")
+        adjustments["ou_confidence"] = "low"
+    
+    # 9. Early market = all predictions preliminary
+    phase = timeline.get("market_phase", "unknown")
+    if phase in ("pre-market", "early-market"):
+        challenges.append(f"All predictions in {phase}. Odds will shift — numbers are preliminary.")
+    
+    # 10. Too few reliable agents
+    reliable_count = sum(1 for r in valid_results if "error" not in r
+                         and confidence.get(r["agent"], {}).get("adjusted_strength") in ("strong", "medium"))
+    if reliable_count <= 2:
+        challenges.append(f"Only {reliable_count}/{actual_contributors} agents reliable. Prediction is fragile.")
+    elif reliable_count <= 4:
+        challenges.append(f"Only {reliable_count}/{actual_contributors} agents reliable. Directional at best.")
+    
+    # 11. Too many conflicts
+    if len(conflicts) >= 3:
+        challenges.append(f"{len(conflicts)} active conflicts. Prediction averages across contradictions.")
+    
+    # 12. Weak home prediction
+    if x12.get("prediction") == "Home" and x12_home < 55:
+        challenges.append(f"Home at {x12_home}% — weak signal, near random if home advantage adjusted.")
+    
+    # Verdict
+    severe = sum(1 for c in challenges if any(w in c.lower() for w in ["contradict", "missing", "fragile", "thin", "narrow"]))
+    
+    if severe >= 3:
+        verdict = "UNRELIABLE — averaging across conflicting/incomplete data, not coherent analysis."
+    elif severe >= 1:
+        verdict = "QUESTIONABLE — internal inconsistencies. Use with extreme caution."
+    elif len(challenges) >= 3:
+        verdict = "WEAK — multiple concerns but direction may still be useful."
+    elif len(challenges) >= 1:
+        verdict = "CAUTIOUS — minor concerns. Prediction is reasonable."
+    else:
+        verdict = "SOUND — passes adversarial review. No significant contradictions found."
+    
+    return {
+        "verdict": verdict,
+        "challenges": challenges,
+        "adjustments": adjustments,
+        "reliable_agent_count": reliable_count,
+        "total_contributors": actual_contributors,
+    }
+
+
 def detect_conflicts(valid_results: list[dict]) -> list[dict]:
     """Detect areas where sub-agent findings contradict each other."""
     conflicts = []
@@ -989,7 +1111,8 @@ def build_bet_recommendations(valid_results: list[dict],
 
 def build_summary(valid_results: list[dict], conflicts: list[dict],
                    consensus: list[dict], bets: dict, confidence: dict,
-                   timeline: dict, guidance: dict, synthetic: dict) -> str:
+                   timeline: dict, guidance: dict, synthetic: dict,
+                   pred_review: dict) -> str:
     """Build executive summary text."""
     parts = []
     
@@ -1068,6 +1191,13 @@ def build_summary(valid_results: list[dict], conflicts: list[dict],
     parts.append(f"  {guidance.get('overall_action', '')}")
     for g in guidance.get("guidance", []):
         parts.append(f"  {g}")
+    
+    # Prediction Review — adversarial challenge on the final numbers
+    parts.append(f"\n=== PREDICTION REVIEW ===")
+    parts.append(f"  Verdict: {pred_review.get('verdict', 'No review')}")
+    parts.append(f"  Reliable agents: {pred_review.get('reliable_agent_count', '?')}/{pred_review.get('total_contributors', '?')}")
+    for c in pred_review.get("challenges", []):
+        parts.append(f"  ⚠ {c}")
     
     # Adversarial review summary
     downgraded_agents = [a for a, c in confidence.items() if c.get("downgraded")]
