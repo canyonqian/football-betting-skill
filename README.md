@@ -1,39 +1,52 @@
 # Football Betting Analysis Skill
 
-An AI agent skill for football betting analysis. Launches 8 parallel sub-agents to reverse-engineer bookmaker pricing logic and identify value opportunities across 1X2, Asian handicap, and Over/Under markets.
+An AI agent skill for football betting analysis. Launches 8 parallel sub-agents + 3-stage adversarial review to reverse-engineer bookmaker pricing logic and produce concrete probability predictions for 1X2, Asian handicap, Over/Under, and Correct Score markets.
 
 ## How It Works
 
 ```
 User: "Analyze Brazil vs Germany"
   └─ 8 parallel sub-agents ─┐
-     A: Form vs odds gap    │
-     B: Odds signals        │
-     C: Historical backtest │
-     D: Bookmaker divergence│── cross-validate ──→ Recommend / Watch / Avoid
-     E: Market sentiment    │
-     F: Objective factors   │
-     G: Tactical matchup    │
-     H: Player/coach + xG   │
-  ──────────────────────────┘
-```
+     A: Fundamentals         │
+     B: Odds signals         │
+     C: Historical backtest  │── cross-validate ──→ adversarial review ──→ probabilities
+     D: Bookmaker divergence │
+     E: Market sentiment     │
+     F: Objective factors    │
+     G: Tactical matchup     │
+     H: Player/coach + xG    │
+  ───────────────────────────┘
 
-Each sub-agent is information-isolated. Conflicts between dimensions are the most valuable signals — where the odds say one thing but fundamentals/tactics/history say another is where edge lives.
+Output:
+  1X2: Home 48% | Draw 26% | Away 26%
+  AH: line -0.5 → Home cover 55%
+  O/U: Over 2.5 → 58%
+  Scores: 1-0 (16%), 2-0 (13%), 1-1 (12%) ...
+```
 
 ## Install
 
 ```bash
-# Install skill
 npx skills add canyonqian/football-betting-skill --all -g
-
-# Install dependencies
 pip install requests
 pip install soccerdata    # optional, for real xG data
-
-# Configure API key
-# Get a free key at https://dashboard.api-football.com/register
-set FOOTBALL_API_KEY=your_key_here
 ```
+
+## API Keys
+
+**Two free API keys are required:**
+
+| Key | Register At | Free Tier | Used For |
+|-----|------------|-----------|----------|
+| `FOOTBALL_API_KEY` | [dashboard.api-football.com](https://dashboard.api-football.com/register) | 100 req/day | Teams, players, fixtures, statistics, injuries, lineups |
+| `ODDS_API_KEY` | [the-odds-api.com](https://the-odds-api.com/#get-access) | 500 credits/month | 1X2, spreads, totals from 40+ bookmakers |
+
+```bash
+set FOOTBALL_API_KEY=your_football_key
+set ODDS_API_KEY=your_odds_key
+```
+
+Both free tiers require no credit card.
 
 ## Usage
 
@@ -52,13 +65,17 @@ If you don't have fixture IDs, the skill will look them up for you using team na
 | Dependency | Required | Purpose |
 |-----------|----------|---------|
 | Python 3.9+ | Yes | Script runtime |
-| `requests` | Yes | API-Football v3 HTTP client |
+| `requests` | Yes | HTTP client for both APIs |
 | `soccerdata` | Optional | Real xG data from Understat (agent H) |
-| FOOTBALL_API_KEY | Yes | Free from [dashboard.api-football.com](https://dashboard.api-football.com/register) |
+| `FOOTBALL_API_KEY` | Yes | Free from [dashboard.api-football.com](https://dashboard.api-football.com/register) |
+| `ODDS_API_KEY` | Yes | Free from [the-odds-api.com](https://the-odds-api.com/#get-access) |
 
-## Data Source
+## Data Sources
 
-All data comes from [API-Football v3](https://www.api-football.com/) via api-sports.io. Free tier: 100 requests/day. No fallback, no workaround — if rate-limited, you need to upgrade.
+| Data | Source | Free Tier |
+|------|--------|-----------|
+| Teams, players, fixtures, stats, injuries | [API-Football v3](https://www.api-football.com/) | 100 req/day |
+| Odds (1X2, spreads, totals), 40+ bookmakers | [The Odds API](https://the-odds-api.com/) | 500 credits/month |
 
 ## Output
 
