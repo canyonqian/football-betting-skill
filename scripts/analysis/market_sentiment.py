@@ -5,11 +5,10 @@ Detects market overheating and contrarian signals:
 - Public bias indicators (retail vs sharp bookmaker gap)
 - Contrarian indicators (when to bet against the crowd)
 
-Since API-Football v3 does not directly expose betting volume, we infer
-sentiment from:
+Sentiment is inferred from:
 1. Odds movement direction (money flows move odds)
-2. Sharp vs retail bookmaker disagreement
-3. Predictions endpoint (aggregated tipster sentiment)
+2. Sharp vs retail bookmaker disagreement (via The Odds API)
+3. Predictions endpoint (aggregated tipster sentiment, via API-Football)
 
 Usage:
     python market_sentiment.py <fixture_id> <league_id> <season>
@@ -19,44 +18,31 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.api_football import (
-    get_fixture_by_id,
-    get_odds,
-    get_predictions,
-    BET_MATCH_WINNER,
-    BET_ASIAN_HANDICAP,
-    BOOKMAKER_PINNACLE,
-    BOOKMAKER_BET365,
-)
+from api.api_football import get_fixture_by_id, get_predictions
+from api.odds_api import get_sport_key, get_odds, extract_h2h_odds
 from utils import print_json, implied_probability
 
 
-SHARP_BOOKMAKER_IDS = {BOOKMAKER_PINNACLE, 3, 15, 24}  # Pinnacle, Betfair, Marathonbet, 1xBet
-RETAIL_BOOKMAKER_IDS = {BOOKMAKER_BET365, 2, 4, 26}   # Bet365, WH, Bwin, Unibet
+SHARP_BOOKMAKERS = {"Pinnacle", "Betfair", "Matchbook", "Marathonbet", "1xBet", "Paddy Power"}
+RETAIL_BOOKMAKERS = {"Bet365", "William Hill", "Unibet", "Ladbrokes", "BetVictor", "DraftKings", "FanDuel"}
 
 
-def compare_sharp_vs_retail(odds_data: list[dict]) -> dict:
+def compare_sharp_vs_retail(h2h_odds: dict) -> dict:
     """Compare sharp and retail bookmaker odds to infer public bias.
-    
+
     If retail odds are shorter than sharp odds for a popular side,
     the public is likely betting heavily on that side.
     """
     sharp_odds = {}
     retail_odds = {}
-    
-    for entry in odds_data:
-        for bm in entry.get("bookmakers", []):
-            bm_id = bm.get("id")
-            bm_name = bm.get("name", "Unknown")
-            for bet in bm.get("bets", []):
-                if bet["id"] == BET_MATCH_WINNER:
-                    for val in bet["values"]:
-                        key = (bm_name, val["value"])
-                        if bm_id in SHARP_BOOKMAKER_IDS:
-                            sharp_odds.setdefault(val["value"], []).append(float(val["odd"]))
-                        elif bm_id in RETAIL_BOOKMAKER_IDS:
-                            retail_odds.setdefault(val["value"], []).append(float(val["odd"]))
-    
+
+    for bm_name, outcomes in h2h_odds.items():
+        for outcome, price in outcomes.items():
+            if bm_name in SHARP_BOOKMAKERS:
+                sharp_odds.setdefault(outcome, []).append(float(price))
+            elif bm_name in RETAIL_BOOKMAKERS:
+                retail_odds.setdefault(outcome, []).append(float(price))
+
     result = {}
     for outcome in ("Home", "Draw", "Away"):
         s = sharp_odds.get(outcome, [])
@@ -70,11 +56,11 @@ def compare_sharp_vs_retail(odds_data: list[dict]) -> dict:
                 "sharp_avg": round(s_avg, 2),
                 "retail_avg": round(r_avg, 2),
                 "gap": round(gap, 3),
-                "bias": "public_favors" if gap > 0.02 
-                        else "public_avoids" if gap < -0.02 
+                "bias": "public_favors" if gap > 0.02
+                        else "public_avoids" if gap < -0.02
                         else "neutral",
             }
-    
+
     return result
 
 
@@ -115,11 +101,17 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
     home_name = f["teams"]["home"]["name"]
     away_name = f["teams"]["away"]["name"]
     
-    odds_data = get_odds(fixture=fixture_id)
+    sport_key = get_sport_key(league_id)
+    if not sport_key:
+        return {"agent": "market_sentiment", "fixture_id": fixture_id,
+                "error": f"No Odds API sport key for league {league_id}"}
+
+    odds_data = get_odds(sport_key)
+    h2h_odds = extract_h2h_odds(odds_data, home_name, away_name)
     predictions = analyse_predictions(fixture_id)
     
     # Sharp vs retail comparison
-    public_bias = compare_sharp_vs_retail(odds_data)
+    public_bias = compare_sharp_vs_retail(h2h_odds)
     
     # Build sentiment interpretation
     notes = []

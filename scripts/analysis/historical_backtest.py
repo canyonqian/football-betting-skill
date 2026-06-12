@@ -17,19 +17,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from api.api_football import (
     get_fixture_by_id,
-    get_odds,
     get_fixtures,
-    BET_MATCH_WINNER,
-    BET_ASIAN_HANDICAP,
-    BET_GOALS_OVER_UNDER,
+)
+from api.odds_api import (
+    get_sport_key,
+    get_odds,
+    extract_h2h_odds,
+    extract_spreads,
+    extract_totals,
 )
 from utils import print_json, implied_probability
 
 
-def get_current_odds_profile(fixture_id: int) -> dict:
-    """Extract the odds profile for the current fixture."""
-    odds_data = get_odds(fixture=fixture_id)
-    
+def get_current_odds_profile(league_id: int, home_name: str, away_name: str) -> dict:
+    """Extract the odds profile for the current fixture using The Odds API."""
     profile = {
         "home_odds": None,
         "draw_odds": None,
@@ -41,47 +42,43 @@ def get_current_odds_profile(fixture_id: int) -> dict:
         "ou_over_odds": None,
         "ou_under_odds": None,
     }
-    
+
+    sport_key = get_sport_key(league_id)
+    if not sport_key:
+        return profile
+
+    odds_data = get_odds(sport_key)
     if not odds_data:
         return profile
-    
-    for entry in odds_data:
-        for bm in entry.get("bookmakers", []):
-            for bet in bm.get("bets", []):
-                if bet["id"] == BET_MATCH_WINNER:
-                    for v in bet["values"]:
-                        if v["value"] == "Home":
-                            profile["home_odds"] = float(v["odd"])
-                        elif v["value"] == "Draw":
-                            profile["draw_odds"] = float(v["odd"])
-                        elif v["value"] == "Away":
-                            profile["away_odds"] = float(v["odd"])
-                
-                elif bet["id"] == BET_ASIAN_HANDICAP:
-                    for v in bet["values"]:
-                        h = v.get("handicap")
-                        if h:
-                            profile["ah_line"] = h
-                        if v["value"] == "Home":
-                            profile["ah_home_odds"] = float(v["odd"])
-                        elif v["value"] == "Away":
-                            profile["ah_away_odds"] = float(v["odd"])
-                
-                elif bet["id"] == BET_GOALS_OVER_UNDER:
-                    for v in bet["values"]:
-                        h = v.get("handicap")
-                        if h:
-                            profile["ou_line"] = h
-                        if v["value"] == "Over":
-                            profile["ou_over_odds"] = float(v["odd"])
-                        elif v["value"] == "Under":
-                            profile["ou_under_odds"] = float(v["odd"])
-            
-            if profile["home_odds"]:
-                break
-        if profile["home_odds"]:
-            break
-    
+
+    h2h = extract_h2h_odds(odds_data, home_name, away_name)
+    if h2h:
+        first_bm = next(iter(h2h.values()))
+        profile["home_odds"] = first_bm.get("Home")
+        profile["draw_odds"] = first_bm.get("Draw")
+        profile["away_odds"] = first_bm.get("Away")
+
+    spreads = extract_spreads(odds_data, home_name, away_name)
+    if spreads:
+        first_bm = next(iter(spreads.values()))
+        for team_name, data in first_bm.items():
+            if profile["ah_home_odds"] is None and team_name == home_name:
+                profile["ah_home_odds"] = data["price"]
+                profile["ah_line"] = data.get("point")
+            elif profile["ah_away_odds"] is None and team_name == away_name:
+                profile["ah_away_odds"] = data["price"]
+
+    totals = extract_totals(odds_data, home_name, away_name)
+    if totals:
+        first_bm = next(iter(totals.values()))
+        over_data = first_bm.get("Over")
+        under_data = first_bm.get("Under")
+        if over_data:
+            profile["ou_over_odds"] = over_data["price"]
+            profile["ou_line"] = over_data.get("point")
+        if under_data:
+            profile["ou_under_odds"] = under_data["price"]
+
     return profile
 
 
@@ -160,7 +157,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
     away_name = f["teams"]["away"]["name"]
     
     # Get current odds profile
-    profile = get_current_odds_profile(fixture_id)
+    profile = get_current_odds_profile(league_id, home_name, away_name)
     
     # Find similar historical matches (league-season baseline)
     past_fixtures = find_similar_historical(league_id, season, 
