@@ -16,7 +16,24 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 DEFAULT_REGIONS = "us,uk,eu"
 DEFAULT_MARKETS = "h2h,spreads,totals"
 
-LEAGUE_TO_SPORT_KEY = {
+# Map football-data.org competition codes → The Odds API sport keys
+COMP_TO_SPORT = {
+    "PL": "soccer_epl",
+    "PD": "soccer_spain_la_liga",
+    "BL1": "soccer_germany_bundesliga",
+    "SA": "soccer_italy_serie_a",
+    "FL1": "soccer_france_ligue_one",
+    "CL": "soccer_uefa_champs_league",
+    "EL": "soccer_uefa_europa_league", 
+    "EC": "soccer_uefa_european_championship",
+    "DED": "soccer_netherlands_eredivisie",
+    "PPL": "soccer_portugal_primeira_liga",
+    "BSA": "soccer_brazil_campeonato",
+    "WC": "soccer_uefa_european_championship",  # fallback
+}
+
+# Legacy mapping (API-Football league IDs — kept for backwards compat)
+_LEAGUE_ID_TO_SPORT_LEGACY = {
     39: "soccer_epl",
     140: "soccer_spain_la_liga",
     78: "soccer_germany_bundesliga",
@@ -133,9 +150,11 @@ def get_historical_odds(sport_key: str, date: str,
     return result.get("data", {})
 
 
-def get_sport_key(league_id: int) -> Optional[str]:
-    """Map API-Football league ID to The Odds API sport key."""
-    return LEAGUE_TO_SPORT_KEY.get(league_id)
+def get_sport_key(league_id: Any) -> Optional[str]:
+    """Map competition ID (football-data.org string or API-Football int) to The Odds API sport key."""
+    if isinstance(league_id, str):
+        return COMP_TO_SPORT.get(league_id)
+    return _LEAGUE_ID_TO_SPORT_LEGACY.get(league_id)
 
 
 def extract_h2h_odds(odds_data: list[dict], home_team: str, away_team: str) -> dict:

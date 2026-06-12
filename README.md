@@ -1,6 +1,6 @@
 # Football Betting Analysis Skill
 
-An AI agent skill for football betting analysis. Launches 8 parallel sub-agents + 3-stage adversarial review to reverse-engineer bookmaker pricing logic and produce concrete probability predictions for 1X2, Asian handicap, Over/Under, and Correct Score markets.
+An AI agent skill for football betting analysis. Launches 8 parallel sub-agents + 3-stage adversarial review to produce concrete probability predictions for 1X2, Asian handicap, Over/Under, and Correct Score.
 
 ## How It Works
 
@@ -9,7 +9,7 @@ User: "Analyze Brazil vs Germany"
   └─ 8 parallel sub-agents ─┐
      A: Fundamentals         │
      B: Odds signals         │
-     C: Historical backtest  │── cross-validate ──→ adversarial review ──→ probabilities
+     C: Historical backtest  │── adversarial review ──→ probabilities
      D: Bookmaker divergence │
      E: Market sentiment     │
      F: Objective factors    │
@@ -19,7 +19,7 @@ User: "Analyze Brazil vs Germany"
 
 Output:
   1X2: Home 48% | Draw 26% | Away 26%
-  AH: line -0.5 → Home cover 55%
+  AH: -0.5 → Home cover 55%
   O/U: Over 2.5 → 58%
   Scores: 1-0 (16%), 2-0 (13%), 1-1 (12%) ...
 ```
@@ -28,73 +28,48 @@ Output:
 
 ```bash
 npx skills add canyonqian/football-betting-skill --all -g
-pip install requests
-pip install soccerdata    # optional, for real xG data
+pip install requests soccerdata
 ```
-
-### If the skill doesn't appear after install
-
-Each agent has its own skills directory. If `npx skills add` doesn't make the skill appear, copy manually:
-
-| Agent | Command |
-|-------|---------|
-| OpenCode | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.config\opencode\skills\football-betting-analysis\` |
-| Claude Code | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.claude\skills\football-betting-analysis\` |
-| Cursor | `xcopy /E %USERPROFILE%\.agents\skills\football-betting-analysis %USERPROFILE%\.cursor\skills\football-betting-analysis\` |
-
-**Restart the agent after copying** — skills are loaded at startup.
 
 ## API Keys
 
-**Two free API keys are required:**
-
-| Key | Register At | Free Tier | Used For |
-|-----|------------|-----------|----------|
-| `FOOTBALL_API_KEY` | [dashboard.api-football.com](https://dashboard.api-football.com/register) | 100 req/day | Teams, players, fixtures, statistics, injuries, lineups |
-| `ODDS_API_KEY` | [the-odds-api.com](https://the-odds-api.com/#get-access) | 500 credits/month | 1X2, spreads, totals from 40+ bookmakers |
+| Key | Register At | Free Tier | Data |
+|-----|------------|-----------|------|
+| `FOOTBALL_DATA_KEY` | [football-data.org](https://www.football-data.org/client/register) | 10 req/min | Fixtures, results, standings, H2H |
+| `ODDS_API_KEY` | [the-odds-api.com](https://the-odds-api.com/#get-access) | 500 credits/mo | 40+ bookmaker odds |
 
 ```bash
-set FOOTBALL_API_KEY=your_football_key
-set ODDS_API_KEY=your_odds_key
+set FOOTBALL_DATA_KEY=your_key
+set ODDS_API_KEY=your_key
 ```
 
-Both free tiers require no credit card.
+No credit card required for either. `soccerdata` provides xG and per-game stats via web scraping (no API key needed).
 
-## Usage
+## Data Sources
 
-Once installed, the skill loads automatically when you ask your AI agent to analyze a match:
-
-```
-Analyze Brazil vs Germany in the World Cup
-Analyze fixture_id=12345, league_id=1, season=2026
-Look at the odds for tonight's Premier League game
-```
-
-If you don't have fixture IDs, the skill will look them up for you using team names and league.
+| Source | Rate Limit | Provides |
+|--------|-----------|----------|
+| **football-data.org** | 10 req/min | Fixtures, standings, H2H, results |
+| **The Odds API** | 500 credits/mo | 1X2, spreads, totals from 40+ bookmakers |
+| **soccerdata** | Unlimited | xG (Understat), per-game stats (FBref) |
+| **Web search** | Unlimited | Injuries, lineups, coach news (Flashscore, Sofascore, Sports Mole) |
 
 ## Requirements
 
 | Dependency | Required | Purpose |
 |-----------|----------|---------|
-| Python 3.9+ | Yes | Script runtime |
-| `requests` | Yes | HTTP client for both APIs |
-| `soccerdata` | Optional | Real xG data from Understat (agent H) |
-| `FOOTBALL_API_KEY` | Yes | Free from [dashboard.api-football.com](https://dashboard.api-football.com/register) |
-| `ODDS_API_KEY` | Yes | Free from [the-odds-api.com](https://the-odds-api.com/#get-access) |
+| Python 3.9+ | Yes | Runtime |
+| `requests` | Yes | HTTP client |
+| `soccerdata` | Recommended | Real xG and per-game stats |
+| `FOOTBALL_DATA_KEY` | Yes | Free from football-data.org |
+| `ODDS_API_KEY` | Yes | Free from the-odds-api.com |
 
-## Data Sources
+## Troubleshooting
 
-| Data | Source | Free Tier |
-|------|--------|-----------|
-| Teams, players, fixtures, stats, injuries | [API-Football v3](https://www.api-football.com/) | 100 req/day |
-| Odds (1X2, spreads, totals), 40+ bookmakers | [The Odds API](https://the-odds-api.com/) | 500 credits/month |
+If the skill doesn't appear after `npx skills add`, copy manually to your agent's skills directory and restart:
 
-## Output
-
-The skill produces a structured report per match:
-
-- **Summary** — one-line assessment
-- **Conflicts & Consensus** — where dimensions disagree (most interesting) and agree (most reliable)
-- **Agent findings** — each of the 8 sub-agents' key output
-- **Betting recommendations** — Recommend / Watch / Avoid per bet type with reasoning
-- **Risk warnings** — key factors affecting confidence
+| Agent | Directory |
+|-------|-----------|
+| OpenCode | `~\.config\opencode\skills\football-betting-analysis\` |
+| Claude Code | `~\.claude\skills\football-betting-analysis\` |
+| Cursor | `~\.cursor\skills\football-betting-analysis\` |
