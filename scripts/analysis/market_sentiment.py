@@ -18,7 +18,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from api.api_football import get_fixture_by_id, get_predictions
+from api.football_data import get_match
 from api.odds_api import get_sport_key, get_odds, extract_h2h_odds
 from utils import print_json, implied_probability
 
@@ -64,42 +64,24 @@ def compare_sharp_vs_retail(h2h_odds: dict) -> dict:
     return result
 
 
-def analyse_predictions(fixture_id: int) -> dict:
-    """Get API predictions and interpret as crowd sentiment."""
-    try:
-        preds = get_predictions(fixture_id)
-        if not preds:
-            return {}
-        p = preds[0]
-        predictions = p.get("predictions", {})
-        comparison = p.get("comparison", {})
-        
-        percent = predictions.get("percent", {})
-        return {
-            "home": percent.get("home"),
-            "draw": percent.get("draw"),
-            "away": percent.get("away"),
-            "advice": predictions.get("advice"),
-            "winning_percent": predictions.get("winning_percent"),
-            "form_comparison": {
-                "home": comparison.get("form", {}).get("home"),
-                "away": comparison.get("form", {}).get("away"),
-            },
-        }
-    except Exception:
-        return {}
+def get_web_search_queries(home_name: str, away_name: str, season: int) -> list[str]:
+    """Generate web search queries for crowd sentiment (predictions not in football-data.org)."""
+    return [
+        f"{home_name} vs {away_name} prediction {season}",
+        f"{home_name} {away_name} betting tips preview {season}",
+        f"{home_name} vs {away_name} expert analysis {season}",
+    ]
 
 
 def run(fixture_id: int, league_id: int, season: int) -> dict:
     """Execute market sentiment analysis."""
-    fixture = get_fixture_by_id(fixture_id)
-    if not fixture:
+    match = get_match(fixture_id)
+    if not match:
         return {"agent": "market_sentiment", "fixture_id": fixture_id, 
-                "error": "Fixture not found"}
+                "error": "Match not found"}
     
-    f = fixture[0]
-    home_name = f["teams"]["home"]["name"]
-    away_name = f["teams"]["away"]["name"]
+    home_name = match["homeTeam"]["name"]
+    away_name = match["awayTeam"]["name"]
     
     sport_key = get_sport_key(league_id)
     if not sport_key:
@@ -108,7 +90,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
 
     odds_data = get_odds(sport_key)
     h2h_odds = extract_h2h_odds(odds_data, home_name, away_name)
-    predictions = analyse_predictions(fixture_id)
+    search_queries = get_web_search_queries(home_name, away_name, season)
     
     # Sharp vs retail comparison
     public_bias = compare_sharp_vs_retail(h2h_odds)
@@ -126,14 +108,9 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         elif bias["bias"] == "public_avoids":
             notes.append(f"Public avoiding {outcome} — may represent value")
     
-    # Check predictions
-    if predictions:
-        home_pct = predictions.get("home")
-        if home_pct and int(home_pct.replace("%", "")) > 60:
-            overheat_signals.append(f"Prediction consensus strongly favors {home_name} ({home_pct})")
-        advice = predictions.get("advice")
-        if advice:
-            notes.append(f"API prediction advice: {advice}")
+    # Check web search availability
+    if search_queries:
+        notes.append(f"Web search suggested for crowd sentiment: see search_queries")
     
     # Determine overheating level
     if len(overheat_signals) >= 2:
@@ -146,7 +123,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         heat_level = "low"
         finding = "No overheating detected — balanced market"
     
-    strength = "strong" if predictions else "weak"
+    strength = "strong" if heat_level == "high" else "medium" if heat_level == "medium" else "weak"
     
     return {
         "agent": "market_sentiment",
@@ -157,7 +134,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
             "overheat_level": heat_level,
             "overheat_signals": overheat_signals,
             "public_bias_analysis": public_bias,
-            "predictions": predictions,
+            "search_queries": search_queries,
         },
         "notes": notes,
     }
