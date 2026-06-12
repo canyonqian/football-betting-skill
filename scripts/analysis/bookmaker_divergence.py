@@ -148,22 +148,22 @@ def analyse_divergence_level(divergence_data: dict) -> tuple[str, list[str]]:
     return level, notes
 
 
-def run(fixture_id: int, league_id: int, season: int) -> dict:
+def run(match_id: int, competition_id: str, season: int) -> dict:
     """Execute multi-bookmaker divergence analysis using The Odds API."""
-    match = get_match(fixture_id)
+    match = get_match(match_id)
     if not match:
-        return {"agent": "bookmaker_divergence", "fixture_id": fixture_id,
+        return {"agent": "bookmaker_divergence", "fixture_id": match_id,
                 "error": "Match not found"}
 
     home_name = match["homeTeam"]["name"]
     away_name = match["awayTeam"]["name"]
 
-    sport_key = get_sport_key(league_id)
+    sport_key = get_sport_key(competition_id)
     if not sport_key:
         return {
             "agent": "bookmaker_divergence",
             "fixture": f"{home_name} vs {away_name}",
-            "error": f"Unknown league_id {league_id} — add mapping to LEAGUE_TO_SPORT_KEY in odds_api.py",
+            "error":             f"Unknown league_id {competition_id} — add mapping to LEAGUE_TO_SPORT_KEY in odds_api.py",
         }
 
     odds_data = get_odds(sport_key)
@@ -240,12 +240,12 @@ if __name__ == "__main__":
     if len(sys.argv) < 4:
         print_json({"error": "Usage: bookmaker_divergence.py <fixture_id> <league_id> <season>"})
         sys.exit(1)
-    fixture_id = int(sys.argv[1])
-    league_id = int(sys.argv[2])
+    match_id = int(sys.argv[1])
+    competition_id = sys.argv[2]
     season = int(sys.argv[3])
     try:
-        result = run(fixture_id, league_id, season)
+        result = run(match_id, competition_id, season)
         print_json(result)
     except Exception as e:
-        print_json({"agent": "bookmaker_divergence", "fixture_id": fixture_id,
+        print_json({"agent": "bookmaker_divergence", "fixture_id": match_id,
                     "error": str(e)})

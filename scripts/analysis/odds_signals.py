@@ -130,29 +130,29 @@ def compute_kelly_bet(home_odds: float, draw_odds: float, away_odds: float) -> d
     }
 
 
-def run(fixture_id: int, league_id: int, season: int) -> dict:
+def run(match_id: int, competition_id: str, season: int) -> dict:
     """Execute odds movement signal analysis using The Odds API."""
-    match = get_match(fixture_id)
+    match = get_match(match_id)
     if not match:
         return {
             "agent": "odds_signals",
-            "fixture_id": fixture_id,
+            "fixture_id": match_id,
             "error": "Match not found",
         }
 
     home_name = match["homeTeam"]["name"]
     away_name = match["awayTeam"]["name"]
 
-    sport_key = get_sport_key(league_id)
+    sport_key = get_sport_key(competition_id)
     if not sport_key:
         return {
             "agent": "odds_signals",
             "fixture": f"{home_name} vs {away_name}",
-            "finding": f"League {league_id} not mapped to an Odds API sport key",
+            "finding": f"League {competition_id} not mapped to an Odds API sport key",
             "signal_strength": "none",
             "key_metrics": {},
             "notes": [
-                f"No sport key mapping for league_id={league_id}. "
+                f"No sport key mapping for league_id={competition_id}. "
                 "Add it to LEAGUE_TO_SPORT_KEY in odds_api.py."
             ],
         }
@@ -292,11 +292,11 @@ if __name__ == "__main__":
     if len(sys.argv) < 4:
         print_json({"error": "Usage: odds_signals.py <fixture_id> <league_id> <season>"})
         sys.exit(1)
-    fixture_id = int(sys.argv[1])
-    league_id = int(sys.argv[2])
+    match_id = int(sys.argv[1])
+    competition_id = sys.argv[2]
     season = int(sys.argv[3])
     try:
-        result = run(fixture_id, league_id, season)
+        result = run(match_id, competition_id, season)
         print_json(result)
     except Exception as e:
-        print_json({"agent": "odds_signals", "fixture_id": fixture_id, "error": str(e)})
+        print_json({"agent": "odds_signals", "fixture_id": match_id, "error": str(e)})

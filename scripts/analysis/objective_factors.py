@@ -86,10 +86,8 @@ def _assess_fatigue(team_id: int, competition_id: str, match_date_str: str) -> d
 
 
 def run(match_id: int, competition_id: str, season: int) -> dict:
-    match_data = get_match(match_id)
-
-    match = match_data.get("match") if isinstance(match_data, dict) else match_data
-    if not match or not isinstance(match, dict):
+    match = get_match(match_id)
+    if not match:
         return {"agent": "objective_factors", "match_id": match_id,
                 "error": "Match not found"}
 
