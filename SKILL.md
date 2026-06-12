@@ -40,6 +40,20 @@ User request: "分析 fixture_id=X, league_id=Y, season=Z"
 
 ## Execution Protocol
 
+### Step 0: Verify API Key
+
+**BEFORE any analysis, verify `RAPIDAPI_KEY` is set:**
+
+```bash
+if (-not $env:RAPIDAPI_KEY) { Write-Output "ERROR: RAPIDAPI_KEY environment variable not set. Please configure it first."; exit 1 }
+python -c "from scripts.api.api_football import _headers; print('API key configured: OK')"
+```
+
+If not configured, **STOP and tell the user:**
+> "RAPIDAPI_KEY not configured. Get a free key at https://rapidapi.com/api-sports/api/api-football and set it with: `set RAPIDAPI_KEY=your_key_here`"
+
+**Do NOT proceed without an API key.** Every sub-agent depends on it.
+
 ### Step 1: Parse the user request
 
 The user may provide:
