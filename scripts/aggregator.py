@@ -64,11 +64,17 @@ def cross_validate(results: list[dict]) -> dict:
     # Adversarial review: challenge each agent's output, adjust confidence
     confidence = adversarial_review(valid, conflicts, consensus)
     
-    # Build bet recommendations (uses adjusted confidence)
-    bets = build_bet_recommendations(valid, conflicts, consensus, confidence)
+    # Odds timeline analysis: how fresh/stale are the odds?
+    timeline = analyse_odds_timeline(valid)
+    
+    # Data sufficiency: what to do when data is incomplete
+    guidance = data_sufficiency_guidance(valid, confidence, timeline)
+    
+    # Build bet recommendations (uses adjusted confidence + timeline)
+    bets = build_bet_recommendations(valid, conflicts, consensus, confidence, timeline)
     
     # Build executive summary
-    summary = build_summary(valid, conflicts, consensus, bets, confidence)
+    summary = build_summary(valid, conflicts, consensus, bets, confidence, timeline, guidance)
     
     return {
         "fixture": fixture,
@@ -85,6 +91,8 @@ def cross_validate(results: list[dict]) -> dict:
         "conflicts": conflicts,
         "consensus": consensus,
         "confidence": confidence,
+        "timeline": timeline,
+        "guidance": guidance,
         "bets": bets,
         "summary": summary,
         "warnings": [e.get("error", "") for e in errors],
@@ -263,6 +271,201 @@ def adversarial_review(valid_results: list[dict], conflicts: list[dict], consens
     return challenges
 
 
+def analyse_odds_timeline(valid_results: list[dict]) -> dict:
+    """Analyze odds freshness: how close to kickoff? When was last update?
+    
+    Odds 3 days before kickoff = very early market, likely to shift.
+    Odds 10 minutes before kickoff = late market, sharp signal.
+    Odds not updated in hours = stale data, unreliable.
+    """
+    from datetime import datetime, timezone, timedelta
+    
+    # Extract fixture time from any agent that has it (odds_signals usually)
+    commence_time = None
+    last_update = None
+    
+    for r in valid_results:
+        if r["agent"] == "odds_signals":
+            # The Odds API returns commence_time in the odds response
+            # We don't have it directly, but we can check notes
+            notes = r.get("notes", [])
+            for note in notes:
+                if "kickoff" in note.lower() or "commence" in note.lower():
+                    pass
+            break
+    
+    # Use API-Football fixture date if available from fundamentals or objective_factors
+    for r in valid_results:
+        metrics = r.get("key_metrics", {})
+        # Check for fixture date in any metrics
+        fixture_date = metrics.get("fixture_date")
+        if fixture_date:
+            try:
+                commence_time = datetime.fromisoformat(fixture_date.replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                pass
+    
+    now = datetime.now(timezone.utc)
+    hours_to_kickoff = None
+    
+    # Analyze based on what we know
+    findings = []
+    
+    # Check if odds data is from The Odds API (sub-agents B, D)
+    has_odds_data = any(
+        r["agent"] in ("odds_signals", "bookmaker_divergence")
+        and "error" not in r
+        for r in valid_results
+    )
+    
+    if not has_odds_data:
+        findings.append("No odds data available — market not yet formed. All odds-based analysis is unreliable.")
+        return {
+            "odds_available": False,
+            "market_phase": "pre-market",
+            "reliability": "none",
+            "findings": findings,
+            "action": "Wait for odds to be published. Re-analyze when bookmakers list this fixture.",
+        }
+    
+    # Staleness check: does market_sentiment or odds_signals show data
+    # The Odds API has last_update per bookmaker — but we aggregate, so check freshness
+    findings.append("Checking odds freshness across sub-agents...")
+    
+    # If we can determine fixture is within 2 hours
+    if commence_time:
+        hours_to_kickoff = (commence_time - now).total_seconds() / 3600
+        
+        if hours_to_kickoff < 0:
+            phase = "in-play"
+            reliability = "medium"  # In-play odds change fast
+            findings.append(f"Fixture is IN-PLAY. Odds are live but volatile. Lock in bets quickly or wait for halftime.")
+        elif hours_to_kickoff < 2:
+            phase = "late-market"
+            reliability = "strong"
+            findings.append(f"{hours_to_kickoff:.1f}h to kickoff. Late market — odds movement is most informative. Strong signal.")
+        elif hours_to_kickoff < 12:
+            phase = "mid-market"
+            reliability = "medium"
+            findings.append(f"{hours_to_kickoff:.1f}h to kickoff. Mid-market. Odds reasonably settled but may still shift on team news.")
+        elif hours_to_kickoff < 48:
+            phase = "early-market"
+            reliability = "weak"
+            findings.append(f"{hours_to_kickoff:.1f}h to kickoff. Early market. Odds likely to move significantly. Recommend re-analysis closer to kickoff.")
+        else:
+            phase = "pre-market"
+            reliability = "none"
+            findings.append(f"{hours_to_kickoff:.1f}h to kickoff. Very early. Odds are preliminary — do NOT bet based on current prices.")
+    else:
+        phase = "unknown"
+        reliability = "medium"
+        findings.append("Cannot determine kickoff time. Assuming mid-market reliability. Verify fixture date before betting.")
+    
+    # Check for data staleness across the board
+    all_stale = all(
+        r.get("signal_strength") == "weak" or r.get("signal_strength") == "none"
+        for r in valid_results if "error" not in r
+    )
+    if all_stale:
+        findings.append("All agents report weak signals — overall data quality is low for this fixture.")
+        if reliability != "none":
+            reliability = "weak"
+    
+    # Action guidance based on phase
+    if phase in ("pre-market", "early-market"):
+        action = "WAIT. Odds will shift significantly. Re-analyze 2-4 hours before kickoff for meaningful signals."
+    elif phase == "in-play":
+        action = "CAUTION. In-play odds are volatile. Use halftime analysis rather than pre-match recommendations."
+    elif phase == "mid-market":
+        action = "Monitor for late movements. Current odds are informative but not final."
+    else:
+        action = "Odds signals are at peak informativeness. Proceed with analysis."
+    
+    return {
+        "odds_available": True,
+        "market_phase": phase,
+        "hours_to_kickoff": round(hours_to_kickoff, 1) if commence_time and hours_to_kickoff else None,
+        "reliability": reliability,
+        "findings": findings,
+        "action": action,
+    }
+
+
+def data_sufficiency_guidance(valid_results: list[dict], confidence: dict, timeline: dict) -> dict:
+    """When data is incomplete, provide actionable guidance instead of just flagging issues.
+    
+    Returns structured advice: what to trust, what to ignore, and what to wait for.
+    """
+    agents_ok = []
+    agents_unreliable = []
+    agents_empty = []
+    
+    for r in valid_results:
+        agent = r["agent"]
+        if "error" in r:
+            agents_empty.append((agent, r.get("error", "unknown error")))
+            continue
+        
+        conf = confidence.get(agent, {})
+        if conf.get("adjusted_strength") == "weak" and conf.get("downgraded", False):
+            agents_unreliable.append((agent, conf.get("downgrade_reasons", [])))
+        elif conf.get("adjusted_strength") in ("strong", "medium"):
+            agents_ok.append(agent)
+        else:
+            agents_unreliable.append((agent, conf.get("downgrade_reasons", [])))
+    
+    n_ok = len(agents_ok)
+    n_total = len(valid_results)
+    
+    # Build guidance
+    guidance_parts = []
+    
+    # Trust these agents
+    if agents_ok:
+        names = ", ".join(a for a in agents_ok)
+        guidance_parts.append(f"TRUST ({n_ok}/{n_total}): {names} — these have sufficient data quality. Weight their findings higher.")
+    else:
+        guidance_parts.append(f"TRUST (0/{n_total}): No agents have sufficient data quality. Treat ALL findings as speculative.")
+    
+    # Ignore these agents
+    if agents_unreliable:
+        for agent, reasons in agents_unreliable:
+            top_reason = reasons[0] if reasons else "unknown issue"
+            guidance_parts.append(f"DOWNGRADE [{agent}]: {top_reason}")
+    
+    # Empty agents
+    if agents_empty:
+        for agent, err in agents_empty:
+            guidance_parts.append(f"MISSING [{agent}]: {err[:100]}")
+    
+    # Overall action
+    market_phase = timeline.get("market_phase", "unknown")
+    odds_reliability = timeline.get("reliability", "medium")
+    
+    if n_ok == 0 and market_phase in ("pre-market", "early-market"):
+        overall = "WAIT. No reliable agents AND odds are early. Re-analyze closer to kickoff."
+    elif n_ok == 0:
+        overall = "AVOID. No agents have sufficient data. Betting on this fixture is gambling, not analysis."
+    elif n_ok <= 2 and odds_reliability == "weak":
+        overall = f"CAUTION. Only {n_ok} agents reliable AND odds signals are weak. Reduce stake or wait."
+    elif n_ok <= 3:
+        overall = f"TENTATIVE. Only {n_ok}/{n_total} agents reliable. Use recommendations as directional, not conviction bets."
+    elif n_ok >= 5:
+        overall = f"SOLID. {n_ok}/{n_total} agents reliable. Analysis has sufficient data foundation."
+    else:
+        overall = f"MODERATE. {n_ok}/{n_total} agents reliable. Standard confidence."
+    
+    return {
+        "reliable_agents": agents_ok,
+        "unreliable_agents": [a for a, _ in agents_unreliable],
+        "empty_agents": [a for a, _ in agents_empty],
+        "reliable_count": n_ok,
+        "total_count": n_total,
+        "guidance": guidance_parts,
+        "overall_action": overall,
+    }
+
+
 def detect_conflicts(valid_results: list[dict]) -> list[dict]:
     """Detect areas where sub-agent findings contradict each other."""
     conflicts = []
@@ -431,8 +634,9 @@ def detect_consensus(valid_results: list[dict]) -> list[dict]:
 def build_bet_recommendations(valid_results: list[dict],
                                conflicts: list[dict],
                                consensus: list[dict],
-                               confidence: dict) -> dict:
-    """Build final bet type recommendations with adversarial confidence adjustment."""
+                               confidence: dict,
+                               timeline: dict) -> dict:
+    """Build final bet type recommendations with adversarial confidence + timeline adjustment."""
     bets = {
         "1x2": {"recommendation": "watch", "confidence": "low", "reasoning": ""},
         "asian_handicap": {"recommendation": "watch", "confidence": "low", "reasoning": ""},
@@ -446,6 +650,11 @@ def build_bet_recommendations(valid_results: list[dict],
     # Count consensus
     has_consensus = len(consensus) > 0
     strong_consensus = any("Strong" in c.get("agreement", "") for c in consensus)
+    
+    # Timeline adjustment: early market = lower confidence
+    market_phase = timeline.get("market_phase", "unknown")
+    odds_stale = market_phase in ("pre-market", "early-market")
+    in_play = market_phase == "in-play"
     
     # Aggregate ADJUSTED signal strengths (after adversarial review)
     adjusted_strengths = [
@@ -461,15 +670,23 @@ def build_bet_recommendations(valid_results: list[dict],
         and confidence.get(r["agent"], {}).get("downgraded", False)
     )
     
-    # Decision logic (incorporates adversarial review)
+    # Decision logic
     if not valid_results:
         bets["1x2"]["recommendation"] = "avoid"
         bets["1x2"]["confidence"] = "high"
         bets["1x2"]["reasoning"] = "No valid agent results — cannot recommend"
+    elif odds_stale:
+        bets["1x2"]["recommendation"] = "watch"
+        bets["1x2"]["confidence"] = "low"
+        bets["1x2"]["reasoning"] = f"Market is {market_phase} — odds will shift. Re-analyze closer to kickoff."
+    elif in_play:
+        bets["1x2"]["recommendation"] = "watch"
+        bets["1x2"]["confidence"] = "low"
+        bets["1x2"]["reasoning"] = "In-play — odds are volatile. Use halftime data, not pre-match analysis."
     elif downgraded_count >= 5:
         bets["1x2"]["recommendation"] = "avoid"
         bets["1x2"]["confidence"] = "high"
-        bets["1x2"]["reasoning"] = f"{downgraded_count}/{len(valid_results)} agents downgraded by adversarial review — data quality too low"
+        bets["1x2"]["reasoning"] = f"{downgraded_count}/{len(valid_results)} agents downgraded — data quality too low"
     elif has_consensus and strong_consensus and not has_conflict and downgraded_count <= 2:
         bets["1x2"]["recommendation"] = "recommend"
         bets["1x2"]["confidence"] = "high"
@@ -500,7 +717,7 @@ def build_bet_recommendations(valid_results: list[dict],
     bets["asian_handicap"]["confidence"] = bets["1x2"]["confidence"]
     bets["asian_handicap"]["reasoning"] = "Follows 1X2 analysis; check odds_signals for AH-specific data"
     
-    # Over/Under: check if adversarial review flagged xG issues
+    # Over/Under
     ou_downgraded = confidence.get("player_coach_xg", {}).get("downgraded", False)
     if ou_downgraded:
         bets["over_under"]["recommendation"] = "watch"
@@ -517,9 +734,19 @@ def build_bet_recommendations(valid_results: list[dict],
 
 
 def build_summary(valid_results: list[dict], conflicts: list[dict],
-                   consensus: list[dict], bets: dict, confidence: dict) -> str:
+                   consensus: list[dict], bets: dict, confidence: dict,
+                   timeline: dict, guidance: dict) -> str:
     """Build executive summary text."""
     parts = []
+    
+    # Timeline header
+    phase = timeline.get("market_phase", "unknown")
+    hours = timeline.get("hours_to_kickoff")
+    if hours is not None:
+        parts.append(f"MARKET PHASE: {phase} ({hours}h to kickoff) — {timeline.get('action', '')}")
+    else:
+        parts.append(f"MARKET PHASE: {phase} — {timeline.get('action', '')}")
+    parts.append("")
     
     # Agent summary with adversarial adjustment
     for r in valid_results:
@@ -531,7 +758,7 @@ def build_summary(valid_results: list[dict], conflicts: list[dict],
         
         if adjusted != strength:
             parts.append(f"[{agent_name}] {strength}→{adjusted} {r.get('finding', 'No finding')}")
-            for d in downgrades[:2]:  # Top 2 reasons only
+            for d in downgrades[:2]:
                 parts.append(f"  ⚠ {d}")
         else:
             parts.append(f"[{agent_name}] ({strength}) {r.get('finding', 'No finding')}")
@@ -554,6 +781,12 @@ def build_summary(valid_results: list[dict], conflicts: list[dict],
     for bet_type, info in bets.items():
         rec = info["recommendation"].upper()
         parts.append(f"  {bet_type}: {rec} (confidence: {info['confidence']}) — {info['reasoning']}")
+    
+    # Data Sufficiency Guidance
+    parts.append(f"\n=== DATA SUFFICIENCY ===")
+    parts.append(f"  {guidance.get('overall_action', '')}")
+    for g in guidance.get("guidance", []):
+        parts.append(f"  {g}")
     
     # Adversarial review summary
     downgraded_agents = [a for a, c in confidence.items() if c.get("downgraded")]

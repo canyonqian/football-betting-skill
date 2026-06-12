@@ -37,6 +37,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
     away_id = f["teams"]["away"]["id"]
     home_name = f["teams"]["home"]["name"]
     away_name = f["teams"]["away"]["name"]
+    fixture_date = f["fixture"].get("date", "")
     
     # 1. Team statistics (form, goals scored/conceded, clean sheets)
     home_stats = get_team_statistics(home_id, league_id, season).get("response", {})
@@ -166,6 +167,7 @@ def run(fixture_id: int, league_id: int, season: int) -> dict:
         "finding": finding,
         "signal_strength": strength,
         "key_metrics": {
+            "fixture_date": fixture_date,
             "fair_home_probability": round(fair_home_prob, 3),
             "market_implied_probability": round(market_implied, 3) if market_implied else None,
             "gap": round(gap, 3) if gap else None,
