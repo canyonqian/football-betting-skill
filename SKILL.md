@@ -42,21 +42,33 @@ User request: "Analyze fixture_id=X, league_id=Y, season=Z"
 
 ## Execution Protocol
 
-### Step 0: Verify API Key
+### Step 0: Verify API Keys
 
-**BEFORE any analysis, verify `FOOTBALL_API_KEY` is set:**
+Two API keys are required. Check both before starting:
+
+**1. FOOTBALL_API_KEY** (team/player/stats data):
+```bash
+if (-not $env:FOOTBALL_API_KEY) { Write-Output "MISSING: FOOTBALL_API_KEY" }
+```
+Register: https://dashboard.api-football.com/register (free, 100 req/day)
+
+**2. ODDS_API_KEY** (odds data from 40+ bookmakers):
+```bash
+if (-not $env:ODDS_API_KEY) { Write-Output "MISSING: ODDS_API_KEY" }
+```
+Register: https://the-odds-api.com/#get-access (free, 500 credits/month)
+
+If either key is missing, **STOP and tell the user exactly which key is missing and where to register it.** Do NOT proceed without both keys.
 
 ```bash
-if (-not $env:FOOTBALL_API_KEY) { Write-Output "ERROR: FOOTBALL_API_KEY environment variable not set. Please configure it first."; exit 1 }
-python -c "from scripts.api.api_football import _headers; print('API key configured: OK')"
+# Quick verify both keys work
+python -c "from scripts.api.api_football import _headers; _headers(); print('FOOTBALL_API_KEY: OK')"
+python -c "from scripts.api.odds_api import get_sports; s = get_sports(); print(f'ODDS_API_KEY: OK — {len(s)} sports available')"
 ```
 
-If not configured, **STOP and tell the user:**
-> "FOOTBALL_API_KEY not configured. Get a free key at https://dashboard.api-football.com/register and set it with: `set FOOTBALL_API_KEY=your_key_here`"
-
-**Do NOT proceed without an API key.** Every sub-agent depends on it.
-
-Get a free key at https://dashboard.api-football.com/register — no credit card required for the free tier (100 requests/day). To upgrade for more requests, subscribe to a paid plan on the same site.
+**Data source split:**
+- FOOTBALL_API_KEY → API-Football: teams, players, fixtures, standings, statistics, injuries, lineups, predictions
+- ODDS_API_KEY → The Odds API: 1X2 odds, spreads, totals from 40+ bookmakers with historical data
 
 ### Step 1: Parse the user request
 
@@ -100,10 +112,10 @@ Task 8 (player_coach_xg):
 
 **CRITICAL RULES:**
 - All 8 sub-agents MUST be launched in parallel — NOT sequentially
+- Sub-agents A-F require `FOOTBALL_API_KEY`. Sub-agents B,C,D require `ODDS_API_KEY`.
 - Sub-agents are information-isolated — they do NOT share context or see each other's output
 - Each sub-agent returns JSON to stdout. Capture it.
 - If any sub-agent returns an error, record it and continue. A partial analysis is better than none.
-- Each sub-agent script requires `FOOTBALL_API_KEY` in environment variables
 - For xG analysis (agent H), optionally install: `pip install soccerdata`
 
 ### Step 3: Run the aggregator
