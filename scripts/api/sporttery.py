@@ -55,6 +55,7 @@ def _parse_sporttery_odds(match: dict) -> dict:
             "asian_handicap": _parse_hhad(match.get("hhad")),
             "correct_score": _parse_crs(match.get("crs")),
             "half_time_full_time": _parse_hafu(match.get("hafu")),
+            "total_goals": _parse_ttg(match.get("ttg")),
         },
     }
 
@@ -90,9 +91,11 @@ def _parse_crs(crs: Optional[dict]) -> Optional[dict]:
     for key, val in crs.items():
         if key in ("updateDate", "updateTime", "goalLine", "goalLineValue"):
             continue
-        if val and str(val).replace(".", "").isdigit():
-            parts = key.replace("s", "").split("s")
-            if len(parts) == 2:
+        if key.endswith("f"):
+            continue
+        if val and str(val).replace(".", "").replace("-", "").isdigit():
+            parts = [p for p in key.split("s") if p]
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
                 try:
                     h, a = int(parts[0]), int(parts[1])
                     scores[f"{h}-{a}"] = float(val)
@@ -119,6 +122,25 @@ def _parse_hafu(hafu: Optional[dict]) -> Optional[dict]:
     return {
         "odds": result,
         "updated": f"{hafu.get('updateDate', '')} {hafu.get('updateTime', '')}",
+    }
+
+
+def _parse_ttg(ttg: Optional[dict]) -> Optional[dict]:
+    """Parse total goals (总进球数) odds."""
+    if not ttg or not ttg.get("s0"):
+        return None
+    goals = {}
+    for i in range(8):
+        key = f"s{i}"
+        trend_key = f"s{i}f"
+        if key in ttg and ttg[key]:
+            goals[str(i) if i < 7 else "7+"] = {
+                "odds": float(ttg[key]),
+                "trend": int(ttg.get(trend_key, 0)) if ttg.get(trend_key) else 0,
+            }
+    return {
+        "goals": goals,
+        "updated": f"{ttg.get('updateDate', '')} {ttg.get('updateTime', '')}",
     }
 
 
@@ -212,3 +234,19 @@ def get_world_cup_matches() -> list[dict]:
             if code == "WCC":
                 result.append(_parse_sporttery_odds(sub))
     return result
+
+
+def get_raw_match(home_team: str, away_team: str) -> Optional[dict]:
+    """Get raw (unparsed) match data for full oddsList access."""
+    cn_home = _cn_name(home_team)
+    cn_away = _cn_name(away_team)
+    days = _fetch()
+    for day in days:
+        for sub in day.get("subMatchList", []):
+            h = sub.get("homeTeamAllName", "")
+            a = sub.get("awayTeamAllName", "")
+            home_ok = cn_home in h or home_team.lower() in h.lower()
+            away_ok = cn_away in a or away_team.lower() in a.lower()
+            if home_ok and away_ok:
+                return sub
+    return None

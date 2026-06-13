@@ -1,88 +1,46 @@
 # Football Betting Analysis Skill
 
-An AI agent skill for football betting analysis. Launches 8 parallel sub-agents + 3-stage adversarial review to produce concrete probability predictions for 1X2, Asian handicap, Over/Under, and Correct Score.
+AI agent skill for football betting analysis. Uses free public data — no API keys needed.
 
 ## How It Works
 
 ```
-User: "Analyze Brazil vs Germany"
-  └─ 8 parallel sub-agents ─┐
-     A: Fundamentals         │
-     B: Odds signals         │
-     C: Historical backtest  │── adversarial review ──→ probabilities
-     D: Bookmaker divergence │
-     E: Market sentiment     │
-     F: Objective factors    │
-     G: Tactical matchup     │
-     H: Player/coach + xG    │
-  ───────────────────────────┘
-
-Output:
-  1X2: Home 48% | Draw 26% | Away 26%
-  AH: -0.5 → Home cover 55%
-  O/U: Over 2.5 → 58%
-  Scores: 1-0 (16%), 2-0 (13%), 1-1 (12%) ...
+User: "Analyze Brazil vs Morocco"
+  Step 1: 竞彩.cn 完整数据 -> odds_analysis.py
+          ALL markets: 1X2, 让球盘, 比分(28+), 半全场, 总进球
+  Step 2: Flashscore              -> flashscore_data.py
+          阵容, 阵型, 首发11人, 伤病
+  Step 3: Web search              -> AI agent
+          球队状态, 球员俱乐部表现, 教练战术
+  Step 4: Aggregator              -> aggregator.py
+          1X2预测 + 让球盘3选1 + 比分预测 + 大小球 + 冷门检测
 ```
+
+## Data Sources (all free, unlimited)
+
+| Source | Provides |
+|--------|----------|
+| 竞彩网 sporttery.cn | 5 markets: 胜平负, 让球(3选1), 比分, 半全场, 总进球 |
+| Flashscore + Playwright | 阵容, 阵型, 首发名单, 位置, 伤病 |
+| Web search | 球队状态, 球员数据, 教练分析 |
 
 ## Install
 
 ```bash
 npx skills add canyonqian/football-betting-skill --all -g
-pip install requests soccerdata scrapling playwright
+pip install requests playwright
 playwright install chromium
 ```
 
-## API Keys
-
-| Key | Register At | Free Tier | Data |
-|-----|------------|-----------|------|
-| `FOOTBALL_DATA_KEY` | [football-data.org](https://www.football-data.org/client/register) | 10 req/min | Fixtures, results, standings, H2H |
-| `ODDS_API_KEY` | [the-odds-api.com](https://the-odds-api.com/#get-access) | 500 credits/mo | 40+ bookmaker odds |
-| `ODDS_API_IO_KEY` | [api.odds-api.io](https://api.odds-api.io) | 100 req/hr | Deep markets (Bet365, Unibet); 265+ bookmakers on paid |
-| *(none)* | [竞彩网 sporttery.cn](https://webapi.sporttery.cn) | Unlimited | Chinese government lottery odds (1X2, handicap, correct score, HT-FT) |
+## Usage
 
 ```bash
-set FOOTBALL_DATA_KEY=your_key
-set ODDS_API_KEY=your_key
-set ODDS_API_IO_KEY=your_key
+# Get all odds
+python scripts/odds_analysis.py "Brazil" "Morocco"
+
+# Get lineups
+python scripts/flashscore_data.py "Brazil" "Morocco"
+
+# Synthesise
+python scripts/aggregator.py odds.json lineups.json
 ```
-
-No credit card required. 竞彩网 needs no API key. `soccerdata` provides xG and per-game stats via web scraping (no API key needed).
-
-## Data Sources
-
-| Source | Rate Limit | Provides |
-|--------|-----------|----------|
-| **football-data.org** | 10 req/min | Fixtures, standings, H2H, results |
-| **The Odds API** | 500 credits/mo | 1X2, spreads, totals from 40+ bookmakers |
-| **odds-api.io** | 100 req/hr | Deep markets: player props, corners, cards from Bet365/Unibet |
-| **竞彩网 sporttery.cn** | Unlimited | Chinese government lottery odds (1X2, handicap, correct score, HT-FT) |
-| **Flashscore (Playwright)** | Unlimited | Predicted/official lineups, formations, player positions, injuries |
-| **soccerdata** | Unlimited | xG (Understat), per-game stats (FBref) |
-| **Web search** | Unlimited | Coach info, team news (Sports Mole, Dongqiudi) |
-
-**Source fallback chain:** The Odds API → odds-api.io → 竞彩网 (each agent tries them in order for odds data).
-
-**Scraper fallback:** `get_team()` (restricted on football-data.org free tier) → Flashscore via Playwright (lineups, player data, injuries). See `scripts/api/scraper.py`.
-
-## Requirements
-
-| Dependency | Required | Purpose |
-|-----------|----------|---------|
-| Python 3.9+ | Yes | Runtime |
-| `requests` | Yes | HTTP client |
-| `playwright` + `scrapling` | Yes | Flashscore lineup/player scraping |
-| `soccerdata` | Recommended | Real xG and per-game stats |
-| `FOOTBALL_DATA_KEY` | Yes | Free from football-data.org |
-| `ODDS_API_KEY` | Yes | Free from the-odds-api.com |
-| `ODDS_API_IO_KEY` | Recommended | Free from api.odds-api.io |
-
-## Troubleshooting
-
-If the skill doesn't appear after `npx skills add`, copy manually to your agent's skills directory and restart:
-
-| Agent | Directory |
-|-------|-----------|
-| OpenCode | `~\.config\opencode\skills\football-betting-analysis\` |
-| Claude Code | `~\.claude\skills\football-betting-analysis\` |
-| Cursor | `~\.cursor\skills\football-betting-analysis\` |
