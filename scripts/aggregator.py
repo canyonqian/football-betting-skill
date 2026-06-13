@@ -1,4 +1,4 @@
-"""Aggregator â€” synthesise odds + lineups + external analysis into predictions.
+"""Aggregator â€?synthesise odds + lineups + external analysis into predictions.
 
 Produces:
   1X2 probabilities, Asian Handicap, Correct Score, Over/Under
@@ -11,7 +11,7 @@ Usage:
 import json
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 
 def aggregate(odds: dict, flashscore: dict | None, external: dict | None = None) -> dict:
@@ -109,7 +109,7 @@ def aggregate(odds: dict, flashscore: dict | None, external: dict | None = None)
     if x12["confidence"] != "none":
         summary_parts.append(f"1X2: {home} {x12['home']}% / Draw {x12['draw']}% / {away} {x12['away']}% -> {x12['prediction']} [{x12['confidence']}]")
     if ah["available"]:
-        summary_parts.append(f"AH ({ah['line']}): {ah['prediction']} â€” {ah['fair_probability']}")
+        summary_parts.append(f"AH ({ah['line']}): {ah['prediction']} â€?{ah['fair_probability']}")
     if scores["available"]:
         ms = scores["most_likely"]
         summary_parts.append(f"Scores: most likely {ms.get('score', '?')} ({ms.get('fair_probability', 0)*100:.1f}%)")
@@ -118,7 +118,7 @@ def aggregate(odds: dict, flashscore: dict | None, external: dict | None = None)
     if ou["available"]:
         summary_parts.append(f"O/U 2.5: Over {ou['over_2_5']}% / Under {ou['under_2_5']}%")
     if htft["available"]:
-        summary_parts.append(f"HT/FT: {htft['prediction']} â€” {[t['outcome']+' '+str(t['fair_probability']*100)[:4]+'%' for t in htft['top_3']]}")
+        summary_parts.append(f"HT/FT: {htft['prediction']} â€?{[t['outcome']+' '+str(t['fair_probability']*100)[:4]+'%' for t in htft['top_3']]}")
     if upset.get("signals"):
         summary_parts.append(f"UPSET: {'; '.join(upset['signals'])}")
     if upset.get("recommendation"):
@@ -170,10 +170,10 @@ def detect_upset(had: dict, hhad: dict, hafu: dict, ttg: dict,
             line_val = abs(float(hh_line))
             fav_prob = max(had_fp.values())
             if line_val >= 1.0 and fav_prob < 0.55:
-                signals.append(f"Deep AH ({hh_line}) but 1X2 only {fav_prob*100:.0f}% â€” market may be overconfident")
+                signals.append(f"Deep AH ({hh_line}) but 1X2 only {fav_prob*100:.0f}% â€?market may be overconfident")
                 score += 2
             if line_val >= 2.0:
-                signals.append(f"Very deep AH ({hh_line}) â€” favorite needs 3+ goal win to cover")
+                signals.append(f"Very deep AH ({hh_line}) â€?favorite needs 3+ goal win to cover")
                 score += 1
         except (ValueError, TypeError):
             pass
@@ -185,7 +185,7 @@ def detect_upset(had: dict, hhad: dict, hafu: dict, ttg: dict,
         if hafu_pred and had_pred:
             hafu_winner = hafu_pred.split("/")[-1] if "/" in hafu_pred else ""
             if hafu_winner != had_pred:
-                signals.append(f"HT/FT says {hafu_pred} but HAD says {had_pred} â€” time-of-scoring mismatch")
+                signals.append(f"HT/FT says {hafu_pred} but HAD says {had_pred} â€?time-of-scoring mismatch")
                 score += 1
 
     # 3. Over 2.5 vs correct score consensus
@@ -193,17 +193,17 @@ def detect_upset(had: dict, hhad: dict, hafu: dict, ttg: dict,
         over = ttg.get("over_2_5_probability", 0)
         under = ttg.get("under_2_5_probability", 0)
         if 0.40 <= over <= 0.45:
-            signals.append(f"O2.5 probability {over*100:.0f}% is marginal â€” goals market is uncertain")
+            signals.append(f"O2.5 probability {over*100:.0f}% is marginal â€?goals market is uncertain")
             score += 1
         if over < 0.35:
-            signals.append(f"O2.5 only {over*100:.0f}% â€” market expects very low-scoring match")
+            signals.append(f"O2.5 only {over*100:.0f}% â€?market expects very low-scoring match")
             score += 1
 
     # 4. Injury impact not reflected
     if flashscore and flashscore.get("injuries"):
         inj = flashscore.get("injuries", [])
         if len(inj) >= 2:
-            signals.append(f"{len(inj)} injuries reported â€” may not be fully priced into odds")
+            signals.append(f"{len(inj)} injuries reported â€?may not be fully priced into odds")
             score += 2
 
     # 5. External analysis suggests upset

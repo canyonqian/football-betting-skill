@@ -21,7 +21,7 @@ Output: JSON with all markets, probabilities, and market signals.
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from api.sporttery import search_by_teams, get_raw_match
 from utils import print_json
